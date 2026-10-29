@@ -1,0 +1,47 @@
+{
+  "name": "@tencent/docs-ai-wendy-agent-chat",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Wendy 自研版 AI 对话系统（协议接入 / 事件归约 / 会话状态机 / 消息渲染）",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:watch": "tsc -p tsconfig.json -w",
+    "clean": "rm -rf dist",
+    "dev": "vite --config demo/vite.config.ts",
+    "dev:mock": "tsx demo/mock-agent-server.ts",
+    "test": "node --import tsx --test \"test/**/*.spec.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "rxjs": "^7.8.2",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "rehype-highlight": "^7.0.2",
+    "highlight.js": "^11.11.1"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-dom": ">=16.13.1",
+    "tslib": "*"
+  },
+  "devDependencies": {
+    "@types/react": "^17.0.90",
+    "@types/react-dom": "^17.0.26",
+    "@vitejs/plugin-react-swc": "^4.3.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.2",
+    "@types/node": "^20.19.28"
+  }
+}

@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1122" viewBox="0 0 1240 1122" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9FB3CC"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1A56B3"/>
+    </marker>
+  </defs>
+  <rect width="1240" height="1122" fill="#FFFFFF"/>
+<text x="40" y="52" font-size="25" font-weight="700" fill="#1F2328">Day 3 · 工具与推理：一条消息里的多种 part</text>
+<text x="1200" y="52" font-size="13" fill="#8A8F98" text-anchor="end">新增 2 个 part 类型 + 渲染管线独立成层 · 目标：直播与快照折叠出同一结构</text>
+<text x="40" y="96" font-size="14" font-weight="600" fill="#5F6368">模块与依赖　箭头 = 谁依赖谁（指向被依赖方）</text>
+<text x="640" y="96" font-size="14" font-weight="600" fill="#5F6368">数据流　编号 = 数据经过的顺序</text>
+<path d="M 320 200 L 320 223 L 174 223 L 174 243" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 320 200 L 320 223 L 466 223 L 466 243" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 174 330 L 174 353 L 320 353 L 320 373" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 320 460 L 320 483 L 174 483 L 174 503" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 320 460 L 320 483 L 466 483 L 466 503" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 174 590 L 174 633" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 174 720 L 174 763" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<path d="M 466 590 L 466 763" stroke="#9FB3CC" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+<rect x="40" y="116" width="560" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="548" y="128" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="567" y="143" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="60" y="150" font-size="17" font-weight="600" fill="#1F2328">demo：MessageList / Composer</text>
+<text x="60" y="178" font-size="12.5" fill="#6B7280">只管布局与输入，不再自己分发 part</text>
+<rect x="40" y="246" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="256" y="258" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="275" y="273" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="60" y="280" font-size="15" font-weight="600" fill="#1F2328">useAgent（接入层）</text>
+<text x="60" y="308" font-size="12" fill="#6B7280">订阅 messages$ / status$，转发命令</text>
+<rect x="332" y="246" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="548" y="258" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="567" y="273" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="352" y="280" font-size="15" font-weight="600" fill="#1F2328">render/part-renderer</text>
+<text x="352" y="308" font-size="12" fill="#6B7280">part 类型 → 组件；未知类型兜底不崩</text>
+<rect x="40" y="376" width="560" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="548" y="388" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="567" y="403" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="60" y="410" font-size="17" font-weight="600" fill="#1F2328">agent-controller</text>
+<text x="60" y="438" font-size="12.5" fill="#6B7280">状态机 · 收尾 · 全量历史组装</text>
+<rect x="40" y="506" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="256" y="518" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="275" y="533" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="60" y="540" font-size="15" font-weight="600" fill="#1F2328">ui-transform</text>
+<text x="60" y="568" font-size="12" fill="#6B7280">+ REASONING / TOOL 分支 + 折叠规则</text>
+<rect x="332" y="506" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="548" y="518" width="38" height="22" rx="11" fill="#EAF2E7"/>
+<text x="567" y="533" font-size="12" font-weight="600" fill="#3F6C2F" text-anchor="middle">D1</text>
+<text x="352" y="540" font-size="15" font-weight="600" fill="#1F2328">transport</text>
+<text x="352" y="568" font-size="12" fill="#6B7280">Day 1 已有：事件流</text>
+<rect x="40" y="636" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="256" y="648" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="275" y="663" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="60" y="670" font-size="15" font-weight="600" fill="#1F2328">message-store</text>
+<text x="60" y="698" font-size="12" fill="#6B7280">+ 回填 tool 结果（patch part，不新增 part）</text>
+<rect x="40" y="766" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="256" y="778" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="275" y="793" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="60" y="800" font-size="15" font-weight="600" fill="#1F2328">message/type</text>
+<text x="60" y="828" font-size="12" fill="#6B7280">+ ReasoningPart / ToolPart{id,name,args,result}</text>
+<rect x="332" y="766" width="268" height="84" rx="12" fill="#FFFFFF" stroke="#CBD9EC" stroke-width="1.5"/>
+<rect x="548" y="778" width="38" height="22" rx="11" fill="#F1F3F4"/>
+<text x="567" y="793" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">D3</text>
+<text x="352" y="800" font-size="15" font-weight="600" fill="#1F2328">transport/types</text>
+<text x="352" y="828" font-size="12" fill="#6B7280">AgentEvent（+ 工具类事件）</text>
+<text x="40" y="880" font-size="12" fill="#8A8F98">为图面可读，省略部分契约依赖边（transform → message/type、render → message/type）</text>
+<rect x="640" y="116" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="147" r="13" fill="#1A56B3"/>
+<text x="666" y="152" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="690" y="142" font-size="14.5" font-weight="600" fill="#1F2328">发送</text>
+<text x="690" y="162" font-size="12" fill="#6B7280">controller.submit → 落 user + assistant 占位</text>
+<path d="M 666 178 L 666 196" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="198" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="229" r="13" fill="#1A56B3"/>
+<text x="666" y="234" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="690" y="224" font-size="14.5" font-weight="600" fill="#1F2328">推理先到</text>
+<text x="690" y="244" font-size="12" fill="#6B7280">REASONING_* → 追加 reasoning part（排在文本前）</text>
+<path d="M 666 260 L 666 278" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="280" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="311" r="13" fill="#1A56B3"/>
+<text x="666" y="316" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="690" y="306" font-size="14.5" font-weight="600" fill="#1F2328">正文</text>
+<text x="690" y="326" font-size="12" fill="#6B7280">TEXT_MESSAGE_CONTENT → 追加 text part</text>
+<path d="M 666 342 L 666 360" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="362" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="393" r="13" fill="#1A56B3"/>
+<text x="666" y="398" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="690" y="388" font-size="14.5" font-weight="600" fill="#1F2328">声明工具调用</text>
+<text x="690" y="408" font-size="12" fill="#6B7280">TOOL_CALL_START/ARGS → 追加 tool part（args 累积）</text>
+<path d="M 666 424 L 666 442" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="444" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="475" r="13" fill="#1A56B3"/>
+<text x="666" y="480" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+<text x="690" y="470" font-size="14.5" font-weight="600" fill="#1F2328">结果回填</text>
+<text x="690" y="490" font-size="12" fill="#6B7280">TOOL_CALL_RESULT → 写 tool part 的 result 字段</text>
+<path d="M 666 506 L 666 524" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="526" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="557" r="13" fill="#1A56B3"/>
+<text x="666" y="562" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">6</text>
+<text x="690" y="552" font-size="14.5" font-weight="600" fill="#1F2328">第二段正文</text>
+<text x="690" y="572" font-size="12" fill="#6B7280">新的 TEXT_MESSAGE_CONTENT → 追加新 text part</text>
+<path d="M 666 588 L 666 606" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="608" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="639" r="13" fill="#1A56B3"/>
+<text x="666" y="644" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">7</text>
+<text x="690" y="634" font-size="14.5" font-weight="600" fill="#1F2328">快照折叠</text>
+<text x="690" y="654" font-size="12" fill="#6B7280">assistant(tool_calls)+tool+assistant → 同一形状</text>
+<path d="M 666 670 L 666 688" stroke="#1A56B3" stroke-width="1.4" stroke-dasharray="4 4" fill="none" marker-end="url(#arrowBlue)"/>
+<rect x="640" y="690" width="560" height="62" rx="10" fill="#F7FAFF" stroke="#D6E2F3" stroke-width="1.2" stroke-dasharray="5 4"/>
+<circle cx="666" cy="721" r="13" fill="#1A56B3"/>
+<text x="666" y="726" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">8</text>
+<text x="690" y="716" font-size="14.5" font-weight="600" fill="#1F2328">渲染</text>
+<text x="690" y="736" font-size="12" fill="#6B7280">part-renderer 按类型分发，未知 part 兜底</text>
+<rect x="40" y="910" width="1160" height="168" rx="14" fill="#F6F8FB" stroke="#DDE5F0" stroke-width="1.2"/>
+<text x="64" y="944" font-size="14" font-weight="600" fill="#5F6368">这一天的设计意图（为什么这样切）</text>
+<circle cx="74" cy="976" r="11" fill="#1F3B63"/>
+<text x="74" y="980" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="94" y="980" font-size="13.5" font-weight="600" fill="#1F2328">result 是字段不是节点</text>
+<text x="94" y="1004" font-size="12.5" fill="#4B5563">结果回填而不是新增 part，</text>
+<text x="94" y="1024" font-size="12.5" fill="#4B5563">两条路径的 parts 天然一致。</text>
+<circle cx="454" cy="976" r="11" fill="#1F3B63"/>
+<text x="454" y="980" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="474" y="980" font-size="13.5" font-weight="600" fill="#1F2328">归属只能靠启发式</text>
+<text x="474" y="1004" font-size="12.5" fill="#4B5563">后端没给 parentMessageId，靠"最近带</text>
+<text x="474" y="1024" font-size="12.5" fill="#4B5563">tool_calls 的 assistant"；猜错降级为 ErrorPart。</text>
+<circle cx="834" cy="976" r="11" fill="#1F3B63"/>
+<text x="834" y="980" font-size="12" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="854" y="980" font-size="13.5" font-weight="600" fill="#1F2328">渲染管线独立成层</text>
+<text x="854" y="1004" font-size="12.5" fill="#4B5563">main.tsx 回到只负责布局，</text>
+<text x="854" y="1024" font-size="12.5" fill="#4B5563">加第四种 part 不再改入口。</text>
+</svg>

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <rect width="1200" height="780" fill="#FFFFFF"/>
+<text x="40" y="48" font-size="25" font-weight="700" fill="#1F2328">工具调用卡片 · 产品视图</text>
+<text x="1160" y="48" font-size="13" fill="#8A8F98" text-anchor="end">Day 3 · 只读展示；一次工具调用 = 一张卡</text>
+<text x="40" y="96" font-size="14" font-weight="700" fill="#1F3B63">① 调用中</text>
+<text x="40" y="116" font-size="12" fill="#8A8F98">收到 TOOL_CALL_START 与 TOOL_CALL_ARGS</text>
+<rect x="40" y="128" width="500" height="86" rx="10" fill="#FFFFFF" stroke="#DCE3EC" stroke-width="1.4"/>
+<circle cx="64" cy="150" r="11" fill="#EAF1FB"/>
+<text x="64" y="155" font-size="13" font-weight="700" fill="#1A56B3" text-anchor="middle">⋯</text>
+<text x="84" y="155" font-size="14" font-weight="600" fill="#1F2328">正在使用 webSearch…</text>
+<text x="524" y="155" font-size="12" fill="#9AA0A6" text-anchor="end">▾</text>
+<line x1="52" y1="172" x2="528" y2="172" stroke="#EFF2F6" stroke-width="1"/>
+<text x="58" y="192" font-size="12" fill="#8A8F98">参数</text>
+<text x="102" y="192" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#3C4043">{"query":"北京天▌</text>
+<text x="620" y="96" font-size="14" font-weight="700" fill="#1F3B63">② 执行中</text>
+<text x="620" y="116" font-size="12" fill="#8A8F98">收到 TOOL_CALL_END，结果还没回</text>
+<rect x="620" y="128" width="500" height="86" rx="10" fill="#FFFFFF" stroke="#DCE3EC" stroke-width="1.4"/>
+<circle cx="644" cy="150" r="11" fill="#EAF1FB"/>
+<text x="644" y="155" font-size="13" font-weight="700" fill="#1A56B3" text-anchor="middle">⋯</text>
+<text x="664" y="155" font-size="14" font-weight="600" fill="#1F2328">正在执行 webSearch…</text>
+<text x="1104" y="155" font-size="12" fill="#9AA0A6" text-anchor="end">▾</text>
+<line x1="632" y1="172" x2="1108" y2="172" stroke="#EFF2F6" stroke-width="1"/>
+<text x="638" y="192" font-size="12" fill="#8A8F98">参数</text>
+<text x="682" y="192" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#3C4043">{"query":"北京天气"}</text>
+<text x="40" y="300" font-size="14" font-weight="700" fill="#1F3B63">③ 完成（默认折叠）</text>
+<text x="40" y="320" font-size="12" fill="#8A8F98">收到 TOOL_CALL_RESULT</text>
+<rect x="40" y="332" width="500" height="44" rx="10" fill="#FFFFFF" stroke="#DCE3EC" stroke-width="1.4"/>
+<circle cx="64" cy="354" r="11" fill="#E7F4EC"/>
+<text x="64" y="359" font-size="13" font-weight="700" fill="#2C7A4B" text-anchor="middle">✓</text>
+<text x="84" y="359" font-size="14" font-weight="600" fill="#1F2328">使用 webSearch</text>
+<text x="524" y="359" font-size="12" fill="#9AA0A6" text-anchor="end">▸</text>
+<text x="620" y="300" font-size="14" font-weight="700" fill="#1F3B63">④ 失败（默认展开）</text>
+<text x="620" y="320" font-size="12" fill="#8A8F98">结果带错误，或本轮 RUN_ERROR</text>
+<rect x="620" y="332" width="500" height="116" rx="10" fill="#FFFFFF" stroke="#F0C2C0" stroke-width="1.4"/>
+<circle cx="644" cy="354" r="11" fill="#FCEDEC"/>
+<text x="644" y="359" font-size="13" font-weight="700" fill="#C0392B" text-anchor="middle">!</text>
+<text x="664" y="359" font-size="14" font-weight="600" fill="#1F2328">webSearch 执行失败</text>
+<text x="1104" y="359" font-size="12" fill="#9AA0A6" text-anchor="end">▾</text>
+<line x1="632" y1="376" x2="1108" y2="376" stroke="#EFF2F6" stroke-width="1"/>
+<text x="638" y="396" font-size="12" fill="#8A8F98">参数</text>
+<text x="682" y="396" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#3C4043">{"query":"北京天气"}</text>
+<text x="638" y="426" font-size="12" fill="#8A8F98">错误</text>
+<text x="682" y="426" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#C0392B">工具超时（code=10001）</text>
+<text x="40" y="498" font-size="14" font-weight="600" fill="#5F6368">状态迁移（由事件驱动，不是由时间驱动）</text>
+<rect x="40" y="520" width="1120" height="72" rx="10" fill="#F7FAFF" stroke="#DCE6F3" stroke-width="1.2"/>
+<rect x="64" y="532" width="92" height="28" rx="14" fill="#E8F0FE"/><text x="110" y="551" font-size="12.5" font-weight="600" fill="#1A56B3" text-anchor="middle">调用中</text>
+<rect x="262" y="532" width="92" height="28" rx="14" fill="#E8F0FE"/><text x="308" y="551" font-size="12.5" font-weight="600" fill="#1A56B3" text-anchor="middle">执行中</text>
+<rect x="460" y="532" width="92" height="28" rx="14" fill="#E7F4EC"/><text x="506" y="551" font-size="12.5" font-weight="600" fill="#2C7A4B" text-anchor="middle">完成</text>
+<text x="164" y="551" font-size="11" fill="#8A8F98">—END→</text>
+<text x="362" y="551" font-size="11" fill="#8A8F98">—RESULT→</text>
+<rect x="640" y="532" width="92" height="28" rx="14" fill="#FCEDEC"/><text x="686" y="551" font-size="12.5" font-weight="600" fill="#C0392B" text-anchor="middle">失败</text>
+<text x="742" y="551" font-size="11" fill="#8A8F98">← 任意状态下 RUN_ERROR / 流中断</text>
+<text x="64" y="578" font-size="11.5" fill="#8A8F98">参数区随 ARGS 增长，此时不解析 JSON；END 只表示"参数已发完"，不代表已出结果</text>
+<text x="40" y="632" font-size="14" font-weight="600" fill="#5F6368">字段 ↔ 界面映射（答不出对应哪块，就不该加这个字段）</text>
+<text x="48" y="660" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#1A56B3">name</text>
+<text x="150" y="660" font-size="12.5" fill="#3C4043">标题行里的工具名</text>
+<text x="520" y="660" font-size="12.5" fill="#8A8F98">没有它 → 用户不知道是哪个工具</text>
+<text x="48" y="686" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#1A56B3">args</text>
+<text x="150" y="686" font-size="12.5" fill="#3C4043">参数区（默认折叠）</text>
+<text x="520" y="686" font-size="12.5" fill="#8A8F98">没有它 → 无法核对"拿什么去查"，出问题也没法排查</text>
+<text x="48" y="712" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#1A56B3">result</text>
+<text x="150" y="712" font-size="12.5" fill="#3C4043">结果区；null 时显示"运行中"</text>
+<text x="520" y="712" font-size="12.5" fill="#8A8F98">没有它 → 用户看不到依据，只觉得"它突然说了句话"</text>
+<text x="48" y="738" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#1A56B3">status</text>
+<text x="150" y="738" font-size="12.5" fill="#3C4043">图标与颜色（四态）</text>
+<text x="520" y="738" font-size="12.5" fill="#8A8F98">只靠 result===null 分不出"调用中"和"执行中"</text>
+<text x="48" y="764" font-size="12.5" font-family="'SF Mono',Menlo,monospace" fill="#1A56B3">id</text>
+<text x="150" y="764" font-size="12.5" fill="#3C4043">不显示，仅内部关联</text>
+<text x="520" y="764" font-size="12.5" fill="#8A8F98">args / result / 快照折叠都靠它对齐</text>
+</svg>

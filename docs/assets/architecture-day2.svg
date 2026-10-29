@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1040" viewBox="0 0 1440 1040" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <rect width="1440" height="1040" fill="#FFFFFF"/>
+  <text x="48" y="56" font-size="26" font-weight="700" fill="#1F2328">wendy-agent-chat · 架构分层（Day 2 完成时）</text>
+  <text x="1392" y="56" font-size="13.5" fill="#8A8F98" text-anchor="end">D1 = Day 1 交付　D2 = Day 2 交付　向下依赖，下层不认识上层</text>
+<rect x="48" y="104" width="1344" height="186" rx="18" fill="#EEF4FE" stroke="#C9DDF7" stroke-width="1.5"/>
+<text x="80" y="144" font-size="19" font-weight="700" fill="#1F3B63">用户触点层</text>
+<rect x="80" y="166" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C9DDF7" stroke-width="1.5"/>
+<rect x="426" y="178" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="445" y="194" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="104" y="202" font-size="19" font-weight="600" fill="#1F2328">App</text>
+<text x="104" y="234" font-size="13.5" fill="#6B7280">布局 · threadId / status 展示</text>
+<rect x="520" y="166" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C9DDF7" stroke-width="1.5"/>
+<rect x="866" y="178" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="885" y="194" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="544" y="202" font-size="19" font-weight="600" fill="#1F2328">MessageList</text>
+<text x="544" y="234" font-size="13.5" fill="#6B7280">气泡渲染 · 流式追加 · 错误段落</text>
+<rect x="960" y="166" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C9DDF7" stroke-width="1.5"/>
+<rect x="1306" y="178" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="1325" y="194" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="984" y="202" font-size="19" font-weight="600" fill="#1F2328">Composer</text>
+<text x="984" y="234" font-size="13.5" fill="#6B7280">输入 / Enter 发送 / IME 守卫 / 中止</text>
+<rect x="48" y="320" width="1344" height="186" rx="18" fill="#E9F1FD" stroke="#C2D8F5" stroke-width="1.5"/>
+<text x="80" y="360" font-size="19" font-weight="700" fill="#1F3B63">应用接入层</text>
+<rect x="80" y="382" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C2D8F5" stroke-width="1.5"/>
+<rect x="426" y="394" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="445" y="410" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="104" y="418" font-size="19" font-weight="600" fill="#1F2328">useAgent</text>
+<text x="104" y="450" font-size="13.5" fill="#6B7280">订阅 messages$ / status$ / threadId$</text>
+<rect x="520" y="382" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C2D8F5" stroke-width="1.5"/>
+<rect x="866" y="394" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="885" y="410" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="544" y="418" font-size="19" font-weight="600" fill="#1F2328">useLogs</text>
+<text x="544" y="450" font-size="13.5" fill="#6B7280">事件日志（直播验收窗口）</text>
+<rect x="960" y="382" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C2D8F5" stroke-width="1.5"/>
+<rect x="1306" y="394" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="1325" y="410" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="984" y="418" font-size="19" font-weight="600" fill="#1F2328">命令转发</text>
+<text x="984" y="450" font-size="13.5" fill="#6B7280">submit / abort → AgentController</text>
+<rect x="48" y="536" width="1344" height="186" rx="18" fill="#D8E7FA" stroke="#AECBF0" stroke-width="1.5"/>
+<text x="80" y="576" font-size="19" font-weight="700" fill="#1F3B63">业务核心层</text>
+<rect x="80" y="598" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#AECBF0" stroke-width="1.5"/>
+<rect x="426" y="610" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="445" y="626" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="104" y="634" font-size="19" font-weight="600" fill="#1F2328">AgentController</text>
+<text x="104" y="666" font-size="13.5" fill="#6B7280">状态机 · 收尾 · 全量历史组装</text>
+<rect x="520" y="598" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#AECBF0" stroke-width="1.5"/>
+<rect x="866" y="610" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="885" y="626" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="544" y="634" font-size="19" font-weight="600" fill="#1F2328">ui-transform</text>
+<text x="544" y="666" font-size="13.5" fill="#6B7280">applyLiveEvent（直播） / aggregateSnapshot（快照）</text>
+<rect x="960" y="598" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#AECBF0" stroke-width="1.5"/>
+<rect x="1306" y="610" width="38" height="22" rx="11" fill="#E8F0FE"/>
+<text x="1325" y="626" font-size="12" font-weight="600" fill="#1A56B3" text-anchor="middle">D2</text>
+<text x="984" y="634" font-size="19" font-weight="600" fill="#1F2328">MessageStore</text>
+<text x="984" y="666" font-size="13.5" fill="#6B7280">BehaviorSubject · 不可变更新 · 缺失容错</text>
+<rect x="48" y="752" width="1344" height="186" rx="18" fill="#E9F6EF" stroke="#C6E7D4" stroke-width="1.5"/>
+<text x="80" y="792" font-size="19" font-weight="700" fill="#1F3B63">传输与外部</text>
+<rect x="80" y="814" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C6E7D4" stroke-width="1.5"/>
+<rect x="426" y="826" width="38" height="22" rx="11" fill="#EAF2E7"/>
+<text x="445" y="842" font-size="12" font-weight="600" fill="#3F6C2F" text-anchor="middle">D1</text>
+<text x="104" y="850" font-size="19" font-weight="600" fill="#1F2328">transport</text>
+<text x="104" y="882" font-size="13.5" fill="#6B7280">sse-parser 字节→帧 · event-parser 帧→事件 · gateway</text>
+<rect x="520" y="814" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C6E7D4" stroke-width="1.5"/>
+<rect x="866" y="826" width="38" height="22" rx="11" fill="#EAF2E7"/>
+<text x="885" y="842" font-size="12" font-weight="600" fill="#3F6C2F" text-anchor="middle">D1</text>
+<text x="544" y="850" font-size="19" font-weight="600" fill="#1F2328">mock server</text>
+<text x="544" y="882" font-size="13.5" fill="#6B7280">本地 SSE 夹具 · 分片 / 粘包 / 故障注入</text>
+<rect x="960" y="814" width="400" height="96" rx="12" fill="#FFFFFF" stroke="#C6E7D4" stroke-width="1.5"/>
+<rect x="1292" y="826" width="52" height="22" rx="11" fill="#F1F3F4"/>
+<text x="1318" y="842" font-size="12" font-weight="600" fill="#5F6368" text-anchor="middle">外部</text>
+<text x="984" y="850" font-size="19" font-weight="600" fill="#1F2328">agentgateway</text>
+<text x="984" y="882" font-size="13.5" fill="#6B7280">现网后端 /chat · /history · /readstream</text>
+  <circle cx="720" cy="984" r="20" fill="#F1F3F4"/>
+  <text x="720" y="992" font-size="20" fill="#5F6368" text-anchor="middle">↓</text>
+  <text x="720" y="1024" font-size="12.5" fill="#8A8F98" text-anchor="middle">调用方向</text>
+</svg>
