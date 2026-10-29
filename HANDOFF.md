@@ -1,7 +1,7 @@
 # 交接说明（新会话窗口请先读这份）
 
 > 用途：当前会话上下文太长，需要换窗口继续。这份文件是**唯一的状态快照**，读完它 + `docs/00-模块拆解与实现路线.md` 的 §〇，就能接着干。
-> 最后更新：2026-10-29（Day 4 进行中）
+> 最后更新：2026-10-29（Day 4 含附件 4-0~4-5 已完成，无阻断）
 
 ---
 
@@ -34,8 +34,8 @@
 | 包路径 | **仓库根目录**（本仓库即该包，原 `packages/@ai/wendy-agent-chat` 已迁出） |
 | 包名 | `@tencent/docs-ai-wendy-agent-chat`（private） |
 | 技术栈 | TypeScript + React 17（`ReactDOM.render`）+ rxjs 7 + vite（demo）+ node:test（测试，tsx 执行） |
-| 测试 | **88 / 88 通过**（split-frames 7、parse-sse 9、parse-frame 9、build-chat-body 7、message-store 21、ui-transform 20、agent-controller 11、wire-content 4） |
-| 类型 | `tsc` **当前有阻断报错**，见 §七 |
+| 测试 | **105 / 105 通过**（split-frames 7、parse-sse 9、parse-frame 9、build-chat-body 7、message-store 21、ui-transform 26、agent-controller 16、wire-content 5、image-block 5） |
+| 类型 | `tsc` exit 0（src + test + demo 三处均通过） |
 | 文档 | `docs/00` 路线、`01/02` Day1-2 手册、`03/04` Day2-3 小结、`05` 面试素材、`06` Day4 手册、`notes/` 问题卡片、`assets/` 图 |
 
 ### 常用命令
@@ -74,6 +74,7 @@ agent/agent-controller.ts                 render/
   status$ / threadId$ / messages$           part-renderer.tsx  → 按 part.type 分发
   submit / abort / loadSnapshot             markdown-text.tsx  → react-markdown + rehype-highlight
   liveCtx（本轮正在写的消息指针）             tool-card.tsx      → 工具卡四态
+                                             image-block.tsx    → 用户附件缩略图（240 上限 + 文件名）
       │                                      │
       ▼                                      │
 message/ui-transform.ts                      │
@@ -125,22 +126,22 @@ transport/             sse-parser（字节→帧）/ event-parser（帧→事件
 
 ---
 
-## 六、当前进行中的任务：Day 4 步 4「附件最小版」
+## 六、Day 4 步 4「附件最小版」：已完成
 
-**目标效果**：Composer 上方 chip 区 → 发送后 user 气泡显示缩略图 + 文字 → mock 回复"收到 1 张图片"。
+**目标效果**：Composer 上方 chip 区 → 发送后 user 气泡显示缩略图 + 文字 → mock 回复「收到 N 张图片」。
 
-**范围**：只支持图片 URL（手填），不做上传/base64/拖拽/放大/assistant 侧图片。
+**范围**：图片来自**手填 URL** 或**剪贴板粘贴**（粘贴转 data URL，单张 ≤ 2MB）；不做上传 / 拖拽 / 放大 / assistant 侧图片。注意：刷新后图还在，要等 §八 的「本地持久化」。
 
 ### 进度
 
 | 步 | 内容 | 状态 |
 |---|---|---|
-| 4-0 | 数据契约（`ImagePart` / `ImageInput` / `WireContentPart`） | ✅ 用户已写 |
-| **4-1** | `toWireContentParts` + 4 条单测 | ✅ 完成（`src/message/wire-content.ts`） |
-| 4-2 | `submit(text, images)` 组装 user 消息 parts + `buildWireHistory` 接上 `toWireContentParts` | ⬜ **下一步** |
-| 4-3 | `part-renderer` 加 `case 'image'`（缩略图 max-width 240 + 文件名） | ⬜ |
-| 4-4 | Composer chip 区（添加/删除，App 持 `draftImages`） | ⬜ |
-| 4-5 | 快照路径支持 `content_parts` → `ImagePart` + mock 回显 | ⬜ |
+| 4-0 | 数据契约（`ImagePart` / `ImageInput` / `WireContentPart`） | ✅ |
+| 4-1 | `toWireContentParts` + 单测（`src/message/wire-content.ts`） | ✅ |
+| 4-2 | `submit(text, images)` 组装 parts + `buildWireHistory` 接 `toWireContentParts`（只挂 user） | ✅ |
+| 4-3 | `part-renderer` 加 `case 'image'` + `ImageBlock`（240 上限、文件名、加载失败占位） | ✅ |
+| 4-4 | Composer chip 区 + 剪贴板粘贴（`draftImages`、2MB 上限、失败提示） | ✅ |
+| 4-5 | 快照路径 `content_parts` → `ImagePart` + mock 回显「收到 N 张图片」 | ✅ |
 
 ### 三条不变量（违反就会出事）
 
@@ -150,14 +151,16 @@ transport/             sse-parser（字节→帧）/ event-parser（帧→事件
 
 ---
 
-## 七、当前阻断项（需用户决定，助手不要擅自修）
+## 七、当前阻断项
 
-| 位置 | 报错 | 最小修法 |
-|---|---|---|
-| `test/agent-controller.spec.ts` 6 处 | `submit` 现签名要 2 个参数 | 调用处补 `, []`（测试由助手维护） |
-| `demo/main.tsx:218` | 同上 | `submit(text, [])`（或等 4-4 一起改） |
-| `src/agent/agent-controller.ts:124` | `images` 定义未使用 | 4-2 用完即消失 |
-| `src/transport/types.ts:38` | warning：`type: 'text' | 'image' | string` 中 `string` 覆盖了字面量 | 去掉 `| string` 或改成 `(string & {})` |
+**无。** 验证口径：`pnpm typecheck` exit 0 · `pnpm test` 105 / 105 · `tsc -p demo/tsconfig.json` exit 0。
+
+已修掉的旧阻断（2026-10-29）：
+
+1. `submit` 从 1 参变 2 参 → 10 处测试调用与 `demo/main.tsx` 全部补齐；
+2. `src/agent/agent-controller.ts` 的 `images` 未使用 → 4-2 已用上。
+
+遗留（**非阻断**）：`src/transport/types.ts:38` 的 `type: 'text' | 'image' | string` 里 `string` 会吞掉字面量，`switch` 收窄时注意；真要收窄就改成 `(string & {})`。
 
 ---
 
@@ -167,7 +170,7 @@ transport/             sse-parser（字节→帧）/ event-parser（帧→事件
 |---|---|---|
 | **reasoning 实现** | 协议有 `REASONING_MESSAGE_START/CONTENT/END`，UI 需"思考过程"折叠区。**用户已决定放到附件之后做**。要抽 `ensureAssistantMessage`（占位接管/复用/新建）给 reasoning 与 text 共用；快照侧按 **wire 顺序**并入 assistant（不是固定前置，因为思考可能多段交错） | 未开始 |
 | **消息内分区（过程/结论分离）** | 「已完成 · 用时 N 秒」折叠条 + 结论单列。判据：完成后按最后一个 text/error 切；流式中不折叠且最后一项可见。**前置：reasoning 要先做** | 已排期，见 `docs/00` Day 5 之后 |
-| 附件 4-2 ~ 4-5 | 见上 | 进行中 |
+| 附件 4-2 ~ 4-5 | 见 §六 | ✅ 已完成 |
 | **本地持久化（含图片回放）** | 把会话 / 消息 / 图片落盘，做成脱离 mock 也能回放的本地 Agent：刷新或重启后历史与图片都能还原。建议 IndexedDB 存 Blob + 元数据（备选：本地 Node 服务落 `data/` 并对外给文件 URL）。**前置：4-5（快照支持 `content_parts`）+ Day 5（会话恢复）** | 已排期，见 `docs/00` Day 5 之后 |
 | `activity` role | 现网 `agent-kit` 定义了 `role:'activity'` + `ACTIVITY_SNAPSHOT/DELTA`，后端未用；将来若启用可替代启发式 | 观察，不做 |
 
@@ -202,4 +205,4 @@ transport/             sse-parser（字节→帧）/ event-parser（帧→事件
 
 ## 十一、给接手窗口的第一句话建议
 
-> 读 `HANDOFF.md` 与 `docs/00-模块拆解与实现路线.md` §〇；当前在 Day 4 步 4 的 4-2；先确认"要我改吗"，再动手。
+> 读 `HANDOFF.md` 与 `docs/00-模块拆解与实现路线.md` §〇；Day 4（含附件 4-0~4-5）已完成、无阻断；下一步从 §八 的 reasoning / 本地持久化里选；先确认"要我改吗"，再动手。
