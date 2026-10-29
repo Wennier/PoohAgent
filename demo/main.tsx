@@ -179,11 +179,27 @@ interface AgentApi {
 }
 
 /**
+ * 快照里的示例图：内联 SVG，不依赖网络。
+ * 4-5 用它验证「`content_parts` → `ImagePart`」这条快照路径——不接的话这行只会显示文字。
+ */
+const SNAPSHOT_IMAGE = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#f5f7fa"/><text x="160" y="82" fill="#4b5563" font-size="20" font-family="sans-serif" text-anchor="middle">北京 · 晴 28°C</text><text x="160" y="114" fill="#9ca3af" font-size="14" font-family="sans-serif" text-anchor="middle">weather.svg</text></svg>',
+)}`;
+
+/**
  * 模拟 /history 的返回：工具调用把一次回答切成了三条扁平消息。
- * 用它来复现「快照路径」的折叠结果，与直播路径对比。
+ * 第一条 user 带 content_parts（文字 + 图片），用来验收「快照也能还原图片」。
  */
 const SNAPSHOT_FIXTURE: WireMessage[] = [
-  { id: 'w1', role: 'user', content: '北京天气' },
+  {
+    id: 'w1',
+    role: 'user',
+    content: '北京天气',
+    content_parts: [
+      { type: 'text', text: '北京天气（顺便看下这张图）' },
+      { type: 'image', filename: 'weather.svg', source: { type: 'data', value: SNAPSHOT_IMAGE, mime_type: 'image/svg+xml' } },
+    ],
+  },
   {
     id: 'msg_a',
     role: 'assistant',

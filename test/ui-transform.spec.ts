@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
 import { MessageStore } from '../src/message/message-store';
-import { createAssistantPlaceholder, getTextContent, type LiveContext } from '../src/message/type';
+import { createAssistantPlaceholder, getTextContent, type ImagePart, type LiveContext } from '../src/message/type';
 import { aggregateSnapshot, applyLiveEvent } from '../src/message/ui-transform';
 import type { AgentEvent, WireMessage } from '../src/transport/types';
 
@@ -167,6 +167,109 @@ describe('aggregateSnapshot', () => {
 
   it('空消息列表返回空数组', () => {
     assert.deepEqual(aggregateSnapshot([]), []);
+  });
+});
+
+describe('aggregateSnapshot · 图片（content_parts）', () => {
+  it('user 消息里的文字与图片按原顺序还原成 parts', () => {
+    const messages = aggregateSnapshot([
+      {
+        id: 'w1',
+        role: 'user',
+        content_parts: [
+          { type: 'text', text: '看这张' },
+          {
+            type: 'image',
+            filename: 'chart.png',
+            source: { type: 'url', value: 'https://example.com/chart.png', mime_type: 'image/png' },
+          },
+        ],
+      },
+    ]);
+
+    assert.deepEqual(messages[0].parts, [
+      // 与 submit 组装一致：user 的 text part 不带 id
+      { type: 'text', content: '看这张' },
+      {
+        type: 'image',
+        url: 'https://example.com/chart.png',
+        filename: 'chart.png',
+        mimeType: 'image/png',
+      },
+    ]);
+  });
+
+  it('只有图片时不产生空 text part', () => {
+    const messages = aggregateSnapshot([
+      {
+        role: 'user',
+        content_parts: [
+          {
+            type: 'image',
+            filename: 'shot.png',
+            source: { type: 'data', value: 'data:image/png;base64,AAA', mime_type: 'image/png' },
+          },
+        ],
+      },
+    ]);
+
+    assert.deepEqual(
+      messages[0].parts.map(part => part.type),
+      ['image'],
+    );
+  });
+
+  it('粘贴得到的 data URL 原样保留（没有公网地址可换）', () => {
+    const messages = aggregateSnapshot([
+      {
+        role: 'user',
+        content_parts: [{ type: 'image', source: { type: 'data', value: 'data:image/png;base64,AAA' } }],
+      },
+    ]);
+
+    const part = messages[0].parts[0];
+    assert.equal(part.type, 'image');
+    assert.equal((part as ImagePart).url, 'data:image/png;base64,AAA');
+  });
+
+  it('缺 filename / mime_type 时给兜底，不能出现 undefined', () => {
+    const messages = aggregateSnapshot([
+      { role: 'user', content_parts: [{ type: 'image', source: { type: 'url', value: 'u' } }] },
+    ]);
+
+    assert.deepEqual(messages[0].parts[0], {
+      type: 'image',
+      url: 'u',
+      filename: 'image-1',
+      mimeType: 'image/png',
+    });
+  });
+
+  it('content_parts 里没有可用内容时回退到 content，不丢文字', () => {
+    const messages = aggregateSnapshot([
+      {
+        role: 'user',
+        content: '老字段兜底',
+        content_parts: [{ type: 'online_doc', text: '' }],
+      },
+    ]);
+
+    assert.deepEqual(messages[0].parts, [{ type: 'text', content: '老字段兜底' }]);
+  });
+
+  it('assistant 消息不产生 ImagePart（图片只属于 user）', () => {
+    const messages = aggregateSnapshot([
+      {
+        role: 'assistant',
+        content: '答复',
+        content_parts: [{ type: 'image', source: { type: 'url', value: 'u' } }],
+      },
+    ]);
+
+    assert.deepEqual(
+      messages[0].parts.map(part => part.type),
+      ['text'],
+    );
   });
 });
 

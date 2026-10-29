@@ -19,6 +19,7 @@ import { Subject } from 'rxjs';
 import { AgentController, AgentStatus } from '../src/agent/agent-controller';
 import type { ImageInput } from '../src/agent/agent-controller';
 import { getTextContent } from '../src/message/type';
+import { aggregateSnapshot } from '../src/message/ui-transform';
 import type { AgentEvent } from '../src/transport/types';
 
 /** 造一个可以手动推送事件的假连接。 */
@@ -241,5 +242,16 @@ describe('AgentController · 附件（图片）', () => {
         source: { type: 'url', value: IMAGE.url, mime_type: 'image/png' },
       },
     ]);
+  });
+
+  it('图片消息从协议历史还原回来，与发送时同构（4-5 不变量）', () => {
+    const { controller } = createController();
+    controller.submit('看这张图', [IMAGE]);
+
+    const [restored] = aggregateSnapshot(controller.buildWireHistory()).filter(
+      message => message.role === 'user',
+    );
+
+    assert.deepEqual(restored.parts, controller.snapshot[0].parts, '发出去再读回来，parts 必须一模一样');
   });
 });

@@ -202,7 +202,7 @@ export function aggregateSnapshot(messages: WireMessage[]): UIMessage[] {
     const { role } = message;
 
     if (role === 'user') {
-      result.push({ id, role: 'user', parts: [createTextPart(extractWireText(message), id)] });
+      result.push({ id, role: 'user', parts: buildUserParts(message) });
       current = null;
       lastRole = role;
       continue;
@@ -280,6 +280,52 @@ export function aggregateSnapshot(messages: WireMessage[]): UIMessage[] {
   }
 
   return result;
+}
+
+/**
+ * 把一条 wire user 消息还原成 parts。
+ *
+ * 与 `submit()` 组装 user 消息的规则必须一致，否则「发出去再读回来」对不上：
+ * - 文字与图片按 `content_parts` 原序排列；
+ * - text part 不带 id（直播侧 `createTextPart(text)` 也不带）；
+ * - 图片字段做兜底，不能把 undefined 传进 `<img src>`。
+ *
+ * 只用于 user：图片是用户附件，assistant 的 content_parts 即便含 image 也不还原。
+ */
+export function buildUserParts(message: WireMessage): Part[] {
+  const contentParts = message.content_parts ?? [];
+
+  // 老历史没有 content_parts → 继续用轻量的 content 字段
+  if (contentParts.length === 0) {
+    const text = message.content ?? '';
+    return text === '' ? [] : [createTextPart(text)];
+  }
+
+  const parts: Part[] = [];
+
+  contentParts.forEach((item, index) => {
+    if (item.type === 'text' && typeof item.text === 'string' && item.text !== '') {
+      parts.push(createTextPart(item.text));
+      return;
+    }
+
+    if (item.type === 'image') {
+      parts.push({
+        type: 'image',
+        url: item.source?.value ?? '',
+        filename: item.filename ?? `image-${index + 1}`,
+        mimeType: item.source?.mime_type ?? 'image/png',
+      });
+    }
+  });
+
+  // content_parts 里没有能识别的内容（如未来的 online_doc）→ 回退到 content，别丢文字
+  if (parts.length === 0) {
+    const text = message.content ?? '';
+    return text === '' ? [] : [createTextPart(text)];
+  }
+
+  return parts;
 }
 
 /** 从 wire 消息里提取纯文本（content_parts 的 text 优先，其次 content）。 */

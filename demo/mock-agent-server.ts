@@ -58,10 +58,18 @@ interface WireMessage {
   id?: string;
   role: string;
   content?: string;
-  /** 多模态内容；Day 4 发图片/文档引用时才会用到。 */
-  content_parts?: unknown[];
+  /** 多模态内容；当前只用到 text / image。 */
+  content_parts?: WireContentPart[];
   tool_call_id?: string;
   tool_calls?: unknown[];
+}
+
+/** 与 src/transport/types 的 WireContentPart 对齐（mock 独立运行，不 import 源码）。 */
+interface WireContentPart {
+  type: string;
+  text?: string;
+  filename?: string;
+  source?: { type: 'url' | 'data'; value: string; mime_type?: string };
 }
 
 /** 一次 /chat 请求的 body。 */
@@ -224,10 +232,29 @@ function resolveScenario(url: URL): Scenario {
   return 'normal';
 }
 
+/**
+ * 从最后一条 **user** 消息里数图片，回一句「收到 N 张图片」。
+ *
+ * 不能直接取 messages 的末尾：客户端提交时末尾是 assistant 占位（parts 为空）。
+ * 返回空串表示这轮没带图，调用方不要拼前缀。
+ */
+function describeIncomingImages(input: ChatInput): string {
+  const lastUser = [...(input.messages ?? [])].reverse().find(message => message.role === 'user');
+  const images = (lastUser?.content_parts ?? []).filter(part => part.type === 'image');
+
+  if (images.length === 0) return '';
+
+  const names = images.map((part, index) => part.filename ?? `image-${index + 1}`);
+  return `收到 ${images.length} 张图片：${names.join('、')}。`;
+}
+
 function buildScript(scenario: Scenario, input: ChatInput, threadId: string): MockEvent[] {
   if (scenario === 'tool') return buildToolScript(input, threadId);
 
-  return buildNormalScript(input, threadId, scenario === 'markdown' ? MOCK_MARKDOWN_REPLY : MOCK_REPLY);
+  const reply = scenario === 'markdown' ? MOCK_MARKDOWN_REPLY : MOCK_REPLY;
+  const imageNote = describeIncomingImages(input);
+
+  return buildNormalScript(input, threadId, imageNote === '' ? reply : `${imageNote}\n\n${reply}`);
 }
 
 // -- 剧本一：纯文本 --------------------------------------------------
