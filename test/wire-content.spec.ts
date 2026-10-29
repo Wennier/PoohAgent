@@ -47,4 +47,21 @@ describe('toWireContentParts · UI parts → 协议 content_parts', () => {
       ['image', 'text'],
     );
   });
+
+  it('粘贴得到的 data URL 标成 source.type=data，而不是非法 url', () => {
+    const pasted: ImagePart = {
+      type: 'image',
+      url: 'data:image/png;base64,iVBORw0KGgo=',
+      filename: 'pasted-1.png',
+      mimeType: 'image/png',
+    };
+
+    const result = toWireContentParts([pasted]);
+
+    assert.deepEqual(result?.[0], {
+      type: 'image',
+      filename: 'pasted-1.png',
+      source: { type: 'data', value: 'data:image/png;base64,iVBORw0KGgo=', mime_type: 'image/png' },
+    });
+  });
 });

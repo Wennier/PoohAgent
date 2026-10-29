@@ -17,6 +17,7 @@ import type { Observable } from 'rxjs';
 import { Subject } from 'rxjs';
 
 import { AgentController, AgentStatus } from '../src/agent/agent-controller';
+import type { ImageInput } from '../src/agent/agent-controller';
 import { getTextContent } from '../src/message/type';
 import type { AgentEvent } from '../src/transport/types';
 
@@ -70,7 +71,7 @@ describe('AgentController · 初始状态', () => {
   it('空文本不发起请求、不产生消息', () => {
     const { controller, fake } = createController();
 
-    assert.equal(controller.submit('   '), false);
+    assert.equal(controller.submit('   ', []), false);
     assert.equal(fake.callCount(), 0);
     assert.deepEqual(controller.snapshot, []);
   });
@@ -80,7 +81,7 @@ describe('AgentController · submit', () => {
   it('提交后立刻出现 user 消息与 assistant 占位，并进入 Generating', () => {
     const { controller } = createController();
 
-    assert.equal(controller.submit('你好'), true);
+    assert.equal(controller.submit('你好', []), true);
 
     const messages = controller.snapshot;
     assert.equal(messages.length, 2);
@@ -94,16 +95,16 @@ describe('AgentController · submit', () => {
   it('生成中再次提交被拒绝', () => {
     const { controller, fake } = createController();
 
-    controller.submit('第一句');
+    controller.submit('第一句', []);
 
-    assert.equal(controller.submit('第二句'), false);
+    assert.equal(controller.submit('第二句', []), false);
     assert.equal(fake.callCount(), 1, '不能有两条在途流');
     assert.equal(controller.snapshot.length, 2);
   });
 
   it('RUN_STARTED 回填 threadId（不是自己生成的）', () => {
     const { controller, fake } = createController();
-    controller.submit('你好');
+    controller.submit('你好', []);
 
     fake.emit({ type: 'RUN_STARTED', threadId: 'thread_from_server' });
 
@@ -112,7 +113,7 @@ describe('AgentController · submit', () => {
 
   it('文本事件会归约进消息，且 onEvent 能观察到每条事件', () => {
     const { controller, fake, events } = createController();
-    controller.submit('你好');
+    controller.submit('你好', []);
 
     fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
     fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_1', delta: '你' });
@@ -124,7 +125,7 @@ describe('AgentController · submit', () => {
 
   it('流结束回到 Ready', () => {
     const { controller, fake } = createController();
-    controller.submit('你好');
+    controller.submit('你好', []);
 
     fake.finish();
 
@@ -133,7 +134,7 @@ describe('AgentController · submit', () => {
 
   it('网络错误：追加错误 part 并回到 Ready', () => {
     const { controller, fake } = createController();
-    controller.submit('你好');
+    controller.submit('你好', []);
     fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
 
     fake.fail(new Error('网络断了'));
@@ -147,7 +148,7 @@ describe('AgentController · submit', () => {
 describe('AgentController · abort', () => {
   it('中止后回到 Ready，错误文案是「已取消」而不是失败', () => {
     const { controller, fake } = createController();
-    controller.submit('你好');
+    controller.submit('你好', []);
 
     controller.abort();
     fake.fail(new DOMException('aborted', 'AbortError'));
@@ -168,7 +169,7 @@ describe('AgentController · abort', () => {
 describe('AgentController · buildWireHistory', () => {
   it('把消息列表转成全量协议历史', () => {
     const { controller, fake } = createController();
-    controller.submit('第一轮');
+    controller.submit('第一轮', []);
     fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_a' });
     fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_a', delta: '回复' });
     fake.finish();
@@ -180,5 +181,65 @@ describe('AgentController · buildWireHistory', () => {
     assert.equal(history[0].content, '第一轮');
     assert.equal(history[1].role, 'assistant');
     assert.equal(history[1].content, '回复');
+  });
+
+  it('纯文本消息不产生 content_parts（保持轻量）', () => {
+    const { controller } = createController();
+    controller.submit('你好', []);
+
+    const [userMessage] = controller.buildWireHistory();
+
+    assert.equal(userMessage.content_parts, undefined);
+    assert.equal(userMessage.content, '你好');
+  });
+});
+
+describe('AgentController · 附件（图片）', () => {
+  const IMAGE: ImageInput = {
+    url: 'https://example.com/chart.png',
+    filename: 'chart.png',
+    mimeType: 'image/png',
+  };
+
+  const IMAGE_PART = {
+    type: 'image' as const,
+    url: IMAGE.url,
+    filename: IMAGE.filename,
+    mimeType: IMAGE.mimeType,
+  };
+
+  it('文字 + 图片：user 消息的 parts 顺序是 text → image', () => {
+    const { controller } = createController();
+
+    assert.equal(controller.submit('看这张图', [IMAGE]), true);
+
+    assert.deepEqual(controller.snapshot[0].parts, [
+      { type: 'text', content: '看这张图' },
+      IMAGE_PART,
+    ]);
+  });
+
+  it('只有图片、没有文字也能发，且不产生空 text part', () => {
+    const { controller } = createController();
+
+    assert.equal(controller.submit('', [IMAGE]), true);
+
+    assert.deepEqual(controller.snapshot[0].parts, [IMAGE_PART]);
+  });
+
+  it('图片消息进协议历史时转成 content_parts，文字必须一起带上', () => {
+    const { controller } = createController();
+    controller.submit('看这张图', [IMAGE]);
+
+    const [userMessage] = controller.buildWireHistory();
+
+    assert.deepEqual(userMessage.content_parts, [
+      { type: 'text', text: '看这张图' },
+      {
+        type: 'image',
+        filename: 'chart.png',
+        source: { type: 'url', value: IMAGE.url, mime_type: 'image/png' },
+      },
+    ]);
   });
 });

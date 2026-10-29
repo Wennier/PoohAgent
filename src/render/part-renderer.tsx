@@ -9,6 +9,7 @@ import React, { type ReactNode } from 'react';
 
 import type { Part } from '../message/type';
 
+import { ImageBlock } from './image-block';
 import { MarkdownText } from './markdown-text';
 import { ToolCard } from './tool-card';
 
@@ -30,6 +31,10 @@ export function renderPart(part: Part): ReactNode {
 
     case 'tool':
       return <ToolCard part={part} />;
+
+    case 'image':
+      // 只可能出现在 user 消息里（image part 只由附件提交产生）
+      return <ImageBlock part={part} />;
 
     default:
       return null;

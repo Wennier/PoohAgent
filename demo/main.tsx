@@ -15,7 +15,7 @@ import ReactDOM from 'react-dom';
 
 import 'highlight.js/styles/github.css';
 
-import { AgentController, AgentStatus } from 'src/agent/agent-controller';
+import { AgentController, AgentStatus, type ImageInput } from 'src/agent/agent-controller';
 import { getTextContent, type UIMessage } from 'src/message/type';
 import { renderPart } from 'src/render/part-renderer';
 import { connectAgentStream } from 'src/transport/agent-gateway';
@@ -92,15 +92,30 @@ function formatEvent(event: AgentEvent): LogLine {
 const App: React.FC = () => {
   const { logs, appendLog, clearLogs } = useLogs();
   const [draft, setDraft] = useState('');
+  /** 本轮要随消息发出去的图片：粘贴得到的 data URL。 */
+  const [draftImages, setDraftImages] = useState<ImageInput[]>([]);
   const { messages, status, threadId, submit, abort, loadSnapshot } = useAgent(appendLog);
 
   const isStreaming = status === AgentStatus.Generating;
 
   const handleSend = useCallback(() => {
-    if (submit(draft)) setDraft('');
-  }, [draft, submit]);
+    // 只有真的发出去（状态门禁通过）才清空草稿与附件，
+    // 否则「生成中被拒」会把用户刚粘的图弄丢。
+    if (submit(draft, draftImages)) {
+      setDraft('');
+      setDraftImages([]);
+    }
+  }, [draft, draftImages, submit]);
 
   const handleDraftChange = useCallback((next: string) => setDraft(next), []);
+
+  const handleAddImage = useCallback((image: ImageInput) => {
+    setDraftImages(previous => [...previous, image]);
+  }, []);
+
+  const handleRemoveImage = useCallback((index: number) => {
+    setDraftImages(previous => previous.filter((_, i) => i !== index));
+  }, []);
 
   return (
     <div style={styles.page}>
@@ -130,8 +145,11 @@ const App: React.FC = () => {
           )}
           <Composer
             draft={draft}
+            images={draftImages}
             streaming={isStreaming}
             onDraftChange={handleDraftChange}
+            onAddImage={handleAddImage}
+            onRemoveImage={handleRemoveImage}
             onSend={handleSend}
             onAbort={abort}
           />
@@ -154,7 +172,7 @@ interface AgentApi {
   status: AgentStatus;
   threadId: string;
   /** 返回是否真的发起（空内容 / 生成中会拒绝）。 */
-  submit: (text: string) => boolean;
+  submit: (text: string, images?: ImageInput[]) => boolean;
   abort: () => void;
   /** 载入一份历史快照（走 aggregateSnapshot），用来复现"历史会话"的渲染结果。 */
   loadSnapshot: () => void;
@@ -215,7 +233,7 @@ function useAgent(appendLog: (text: string, tone?: LogEntry['tone']) => void): A
     };
   }, [controller]);
 
-  const submit = useCallback((text: string) => controller.submit(text), [controller]);
+  const submit = useCallback((text: string, images?: ImageInput[]) => controller.submit(text, images), [controller]);
   const abort = useCallback(() => controller.abort(), [controller]);
   const loadSnapshot = useCallback(() => controller.loadSnapshot(SNAPSHOT_FIXTURE), [controller]);
 
@@ -417,14 +435,55 @@ const MessageBubble: React.FC<{ message: UIMessage }> = ({ message }) => {
 
 interface ComposerProps {
   draft: string;
+  /** 已附加的图片（粘贴得到的 data URL）。 */
+  images: ImageInput[];
   /** 是否正在生成。生成中禁止再次发送，只允许中止。 */
   streaming: boolean;
   onDraftChange: (next: string) => void;
+  onAddImage: (image: ImageInput) => void;
+  onRemoveImage: (index: number) => void;
   onSend: () => void;
   onAbort: () => void;
 }
 
-const Composer: React.FC<ComposerProps> = ({ draft, streaming, onDraftChange, onSend, onAbort }) => {
+/**
+ * 粘贴图片的大小上限。
+ *
+ * data URL 是 base64，内存占用约为原图的 1.37 倍；再来一张 2MB 截图，
+ * 单次请求体就会到 MB 级。demo 阶段设个硬上限，超了明确提示，不静默失败。
+ */
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/** 把剪贴板里的 File 读成 data URL：粘贴拿不到公网地址，只能内联。 */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 剪贴板里的图片没有文件名，按 mime 造一个可读的。 */
+function pastedFilename(type: string): string {
+  const subtype = type.split('/')[1] ?? 'png';
+  const ext = subtype === 'jpeg' ? 'jpg' : subtype;
+  return `pasted-${Date.now()}.${ext}`;
+}
+
+const Composer: React.FC<ComposerProps> = ({
+  draft,
+  images,
+  streaming,
+  onDraftChange,
+  onAddImage,
+  onRemoveImage,
+  onSend,
+  onAbort,
+}) => {
+  /** 粘贴失败提示（太大 / 读取失败）：用局部 state，不污染草稿。 */
+  const [pasteError, setPasteError] = useState('');
+
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
       // 中文输入法组合态下按 Enter 是「上屏」而不是「发送」，必须放过。
@@ -438,15 +497,77 @@ const Composer: React.FC<ComposerProps> = ({ draft, streaming, onDraftChange, on
     [onSend],
   );
 
+  /**
+   * 粘贴图片。
+   *
+   * 关键边界：**只有剪贴板里真的有图片才拦截**——否则会吃掉正常的文字粘贴。
+   * （`preventDefault` 一旦无条件调用，用户粘一段文字就什么都没发生，很难查。）
+   */
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const files = Array.from(event.clipboardData.items)
+        .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+        .map(item => item.getAsFile())
+        .filter((file): file is File => file !== null);
+
+      if (files.length === 0) return;
+
+      event.preventDefault();
+      setPasteError('');
+
+      void (async () => {
+        // 串行读，保证多张图按粘贴顺序进 chip
+        for (const file of files) {
+          if (file.size > MAX_IMAGE_BYTES) {
+            setPasteError(`图片太大（${(file.size / 1024 / 1024).toFixed(1)}MB），上限 2MB`);
+            continue;
+          }
+
+          try {
+            const url = await readAsDataUrl(file);
+            onAddImage({ url, filename: pastedFilename(file.type), mimeType: file.type });
+          } catch {
+            setPasteError('图片读取失败，换一张试试');
+          }
+        }
+      })();
+    },
+    [onAddImage],
+  );
+
   return (
     <div style={styles.composer}>
+      {images.length > 0 && (
+        <div style={styles.chips}>
+          {images.map((image, index) => (
+            <div key={`${image.filename}-${index}`} style={styles.chip}>
+              <img src={image.url} alt={image.filename} style={styles.chipThumb} />
+              <span style={styles.chipName} title={image.filename}>
+                {image.filename}
+              </span>
+              <button
+                type="button"
+                style={styles.chipRemove}
+                aria-label={`移除 ${image.filename}`}
+                onClick={() => onRemoveImage(index)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <textarea
         style={styles.textarea}
         value={draft}
-        placeholder="输入内容，Enter 发送 / Shift+Enter 换行"
+        placeholder="输入内容，Enter 发送 / Shift+Enter 换行 · 可直接粘贴截图"
         onChange={event => onDraftChange(event.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
       />
+
+      {pasteError !== '' && <div style={styles.pasteError}>{pasteError}</div>}
 
       <div style={styles.composerBar}>
         <div style={styles.actions}>
@@ -673,6 +794,35 @@ const styles: Record<string, React.CSSProperties> = {
     font: 'inherit',
     outline: 'none',
   },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '4px 6px',
+    border: '1px solid #e3e5e8',
+    borderRadius: 6,
+    background: '#fafbfc',
+    maxWidth: 260,
+  },
+  chipThumb: { width: 40, height: 40, objectFit: 'cover', borderRadius: 4, display: 'block' },
+  chipName: {
+    fontSize: 12,
+    color: '#4b5563',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  chipRemove: {
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    color: '#8a8f99',
+    fontSize: 14,
+    lineHeight: 1,
+    padding: 0,
+  },
+  pasteError: { fontSize: 12, color: '#d93026' },
   composerBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   field: { display: 'flex', alignItems: 'center', gap: 6 },
   fieldLabel: { color: '#6b7280', fontSize: 12 },

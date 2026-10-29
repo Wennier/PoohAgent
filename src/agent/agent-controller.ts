@@ -23,8 +23,16 @@
 import { BehaviorSubject, type Observable, type Subscription } from 'rxjs';
 
 import { MessageStore } from '../message/message-store';
-import { createAssistantPlaceholder, getTextContent, type LiveContext, type UIMessage } from '../message/type';
+import {
+  createAssistantPlaceholder,
+  getTextContent,
+  type ImagePart,
+  type LiveContext,
+  type Part,
+  type UIMessage,
+} from '../message/type';
 import { aggregateSnapshot, applyLiveEvent, createErrorPart, createTextPart } from '../message/ui-transform';
+import { toWireContentParts } from '../message/wire-content';
 import { connectAgentStream } from '../transport/agent-gateway';
 import type { AgentEvent, WireMessage } from '../transport/types';
 
@@ -121,14 +129,30 @@ export class AgentController {
    * - 空文本：不加任何消息，return false
    * - 上一轮未结束就再次提交：拒绝，不能产生两条在途流
    */
-  submit(text: string, images: ImageInput[]): boolean {
-    // TODO(wendy): 按上面 7 步实现
+  submit(text: string, images: ImageInput[] = []): boolean {
     if (this.status === AgentStatus.Generating) {
       return false;
     }
 
-    if (text.trim() === '') {
+    const textContent = text.trim();
+
+    if (textContent === '' && !images.length) {
       return false;
+    }
+
+    const parts: Part[] = [];
+    if (textContent !== '') {
+      parts.push(createTextPart(text));
+    }
+    if (images.length) {
+      // 显式标注返回类型 ImagePart：否则对象字面量里的 type 会被放宽成 string，
+      // 装进 Part[] 时无法匹配 ImagePart 要求的字面量类型 'image'。
+      parts.push(...images.map((image): ImagePart => ({
+        type: 'image',
+        url: image.url,
+        filename: image.filename,
+        mimeType: image.mimeType,
+      })));
     }
 
     this.store.push({
@@ -136,7 +160,7 @@ export class AgentController {
       // 用毫秒 + 随机后缀，避免连发两条时 Date.now() 相同导致重复。
       id: `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       role: 'user',
-      parts: [createTextPart(text)],
+      parts,
     });
 
     this.store.push(createAssistantPlaceholder());
@@ -222,17 +246,25 @@ export class AgentController {
   }
 
   /**
-   * 把当前消息列表转成协议历史（已给好）。
+   * 把当前消息列表转成协议历史。
    *
-   * 只取文本内容：Day 2 的消息只有 user 文本 + assistant 文本。
+   * 纯文本消息只用轻量的 `content`；带图片的消息额外带 `content_parts`
+   *（协议里 content_parts 非空时会忽略 content，所以文字必须一起放进 content_parts，
+   * 这一步由 toWireContentParts 保证）。
    * Day 3 加了工具调用之后，这里要补 tool_calls / tool 消息，否则后端会丢上下文。
    */
   buildWireHistory(): WireMessage[] {
-    return this.store.snapshot.map(message => ({
-      id: message.id,
-      role: message.role,
-      content: getTextContent(message),
-    }));
+    return this.store.snapshot.map(message => {
+      const contentParts = message.role === 'user' ? toWireContentParts(message.parts) : undefined;
+
+      return {
+        id: message.id,
+        role: message.role,
+        content: getTextContent(message),
+        // 纯文本消息保持不出现该字段，避免 deepEqual 语义与 payload 体积都变脏。
+        ...(contentParts ? { content_parts: contentParts } : {}),
+      };
+    });
   }
 
   /** 供派生逻辑使用：把一段错误追加到当前回答末尾（已给好）。 */

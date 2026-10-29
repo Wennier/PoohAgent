@@ -38,7 +38,13 @@ export function toWireContentParts(parts: Part[]): WireContentPart[] | undefined
       result.push({
         type: 'image',
         filename: part.filename,
-        source: { type: 'url', value: part.url, mime_type: part.mimeType },
+        source: {
+          // 粘贴的图只有 data URL，没有公网地址：协议要标成 data，
+          // 否则后端会把 "data:image/png;base64,…" 当成一个非法 URL。
+          type: part.url.startsWith('data:') ? 'data' : 'url',
+          value: part.url,
+          mime_type: part.mimeType,
+        },
       });
     }
 
