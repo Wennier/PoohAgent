@@ -168,6 +168,7 @@ transport/             sse-parser（字节→帧）/ event-parser（帧→事件
 | **reasoning 实现** | 协议有 `REASONING_MESSAGE_START/CONTENT/END`，UI 需"思考过程"折叠区。**用户已决定放到附件之后做**。要抽 `ensureAssistantMessage`（占位接管/复用/新建）给 reasoning 与 text 共用；快照侧按 **wire 顺序**并入 assistant（不是固定前置，因为思考可能多段交错） | 未开始 |
 | **消息内分区（过程/结论分离）** | 「已完成 · 用时 N 秒」折叠条 + 结论单列。判据：完成后按最后一个 text/error 切；流式中不折叠且最后一项可见。**前置：reasoning 要先做** | 已排期，见 `docs/00` Day 5 之后 |
 | 附件 4-2 ~ 4-5 | 见上 | 进行中 |
+| **本地持久化（含图片回放）** | 把会话 / 消息 / 图片落盘，做成脱离 mock 也能回放的本地 Agent：刷新或重启后历史与图片都能还原。建议 IndexedDB 存 Blob + 元数据（备选：本地 Node 服务落 `data/` 并对外给文件 URL）。**前置：4-5（快照支持 `content_parts`）+ Day 5（会话恢复）** | 已排期，见 `docs/00` Day 5 之后 |
 | `activity` role | 现网 `agent-kit` 定义了 `role:'activity'` + `ACTIVITY_SNAPSHOT/DELTA`，后端未用；将来若启用可替代启发式 | 观察，不做 |
 
 ---
