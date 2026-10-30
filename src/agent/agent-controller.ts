@@ -35,6 +35,7 @@ import { aggregateSnapshot, applyLiveEvent, createErrorPart, createTextPart } fr
 import { toWireContentParts } from '../message/wire-content';
 import { connectAgentStream } from '../transport/agent-gateway';
 import type { AgentEvent, WireMessage } from '../transport/types';
+import { classifyThrown } from './error-classify';
 
 /** 会话运行状态。Day 2 只有两个；Day 5 会加 Restoring（历史回放中）。 */
 export enum AgentStatus {
@@ -188,6 +189,14 @@ export class AgentController {
       this.status$.next(AgentStatus.Ready);
     };
 
+    /**
+     * 本次提交是否已经收到过事件。
+     *
+     * 它是 `query` 与 `stream` 的分界线：一个事件都没收到 = 请求还没建立，
+     * 收到过 = 流已经开始、中途断的。生产者只能是这里——分类器拿不到订阅状态。
+     */
+    let receivedEvent = false;
+
     this.subscription = connect({
       threadId: this.threadId$.value,
       messages,
@@ -195,6 +204,7 @@ export class AgentController {
       signal: controller.signal,
     }).subscribe({
       next: (event: AgentEvent) => {
+        receivedEvent = true;
         this.options.onEvent?.(event);
         if (event.type === 'RUN_STARTED' && event.threadId) {
           this.threadId$.next(event.threadId);
@@ -207,12 +217,10 @@ export class AgentController {
         if (event.type === 'RUN_FINISHED') finish();
         if (event.type === 'RUN_ERROR') finish();
       },
-      error: (error: Error) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          this.appendError('用户已取消');
-        } else {
-          this.appendError(error.message);
-        }
+      error: (error: unknown) => {
+        // 分类在这里做，而不是在渲染层：只有这一层同时知道「异常是什么」和「流有没有开始」
+        const classified = classifyThrown(error, { receivedEvent });
+        this.appendError(classified.text, classified.code);
 
         finish();
       },
@@ -268,10 +276,10 @@ export class AgentController {
   }
 
   /** 供派生逻辑使用：把一段错误追加到当前回答末尾（已给好）。 */
-  appendError(message: string): void {
+  appendError(message: string, code?: string): void {
     const last = this.store.snapshot.at(-1);
     const targetId = last?.role === 'assistant' ? last.id : createAssistantPlaceholder().id;
-    this.store.appendPart(targetId, createErrorPart(message));
+    this.store.appendPart(targetId, createErrorPart(message, code));
   }
 
   /** @internal 供 submit 内部使用，外部不要调。 */

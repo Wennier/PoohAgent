@@ -18,8 +18,10 @@ import { Subject } from 'rxjs';
 
 import { AgentController, AgentStatus } from '../src/agent/agent-controller';
 import type { ImageInput } from '../src/agent/agent-controller';
+import type { ErrorPart } from '../src/message/type';
 import { getTextContent } from '../src/message/type';
 import { aggregateSnapshot } from '../src/message/ui-transform';
+import { AgentHttpError } from '../src/transport/agent-gateway';
 import type { AgentEvent } from '../src/transport/types';
 
 /** 造一个可以手动推送事件的假连接。 */
@@ -143,6 +145,44 @@ describe('AgentController · submit', () => {
     assert.equal(controller.status, AgentStatus.Ready);
     const { parts } = controller.snapshot[1];
     assert.equal(parts.at(-1)?.type, 'error');
+  });
+
+  it('非 2xx 且一个事件都没收到：判定为 query，文案是人话并带状态码', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+
+    fake.fail(new AgentHttpError(429, 3000));
+
+    const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
+    assert.equal(last.type, 'error');
+    assert.equal(last.code, '429');
+    // 不是 "/chat failed: 429" —— 那是给开发者看的
+    assert.equal(last.message, '请求失败（429）');
+  });
+
+  it('已经吐过事件后再断：判定为 stream，提示可以重试这一轮', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+    fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
+    fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_1', delta: '半截' });
+
+    fake.fail(new TypeError('terminated'));
+
+    const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
+    assert.match(last.message, /中断/);
+    assert.equal(last.code, undefined, '流中断没有状态码');
+  });
+
+  it('abort 不带状态码：取消不是可重试的失败', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+
+    controller.abort();
+    fake.fail(new DOMException('aborted', 'AbortError'));
+
+    const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
+    assert.equal(last.message, '已取消');
+    assert.equal(last.code, undefined);
   });
 });
 
