@@ -20,6 +20,36 @@ import type { AgentEvent, ChatRequestBody, ConnectInput } from './types';
 const DEFAULT_CHAT_URL = '/api/v6/agentgateway/chat';
 
 /**
+ * 非 2xx 的响应。
+ *
+ * 为什么不能只抛 `new Error('/chat failed: ' + status)`：
+ * 上层要判断"可不可重试、等多久"，而 `status` 和 `Retry-After` 在第一现场就被丢了，
+ * 后面再怎么分析也拿不回来。文案保持原样，所以这一层改动对页面不可见。
+ */
+export class AgentHttpError extends Error {
+  readonly status: number;
+  readonly retryAfterMs: number | null;
+
+  constructor(status: number, retryAfterMs: number | null) {
+    super(`/chat failed: ${status}`);
+    this.name = 'AgentHttpError';
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** `Retry-After` 支持两种格式：秒数或 HTTP 日期。解析不出来返回 null（不猜）。 */
+function parseRetryAfterMs(raw: string | null): number | null {
+  if (!raw) return null;
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+}
+
+/**
  * 组装 /chat 的请求体（纯函数，先写它并单测，不要碰网络）。
  *
  * @param input 连接参数
@@ -79,7 +109,7 @@ async function* streamEvents(input: ConnectInput): AsyncGenerator<AgentEvent, vo
     body: JSON.stringify(body),
     signal: input.signal,
   });
-  if (!res.ok) throw new Error(`/chat failed: ${res.status}`);
+  if (!res.ok) throw new AgentHttpError(res.status, parseRetryAfterMs(res.headers.get('Retry-After')));
   if (!res.body) throw new Error('响应体为空');
 
   const frames = parseSseFrames(res.body);
