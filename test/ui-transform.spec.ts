@@ -109,6 +109,17 @@ describe('applyLiveEvent · 其他事件', () => {
     assert.equal(store.snapshot[0].parts[0].type, 'error');
   });
 
+  it('RUN_ERROR 的业务码透传到 error part', () => {
+    send({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
+    send({ type: 'RUN_ERROR', message: '请求太频繁，请稍后再试', code: '439906' });
+
+    assert.deepEqual(store.snapshot[0].parts.at(-1), {
+      type: 'error',
+      message: '请求太频繁，请稍后再试',
+      code: '439906',
+    });
+  });
+
   it('未知事件不抛错且不改动消息', () => {
     send({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
     const before = store.snapshot;

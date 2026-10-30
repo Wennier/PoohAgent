@@ -159,7 +159,8 @@ export function applyLiveEvent(store: MessageStore, event: AgentEvent, ctx: Live
       const lastMessage = messages[messages.length - 1];
       const targetId = lastMessage?.role === 'assistant' ? lastMessage.id : createAssistantPlaceholder().id;
 
-      store.appendPart(targetId, createErrorPart(event.message || '生成失败'));
+      // code 透传：渲染层靠它决定文案分级与是否给"重试"（不在这里翻译成人话）
+      store.appendPart(targetId, createErrorPart(event.message || '生成失败', event.code));
       return;
     }
 

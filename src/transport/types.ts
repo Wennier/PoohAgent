@@ -115,7 +115,7 @@ export type AgentEvent =
   | (BaseEvent & { type: 'TEXT_MESSAGE_CONTENT'; messageId: string; delta: string })
   | (BaseEvent & { type: 'TEXT_MESSAGE_END'; messageId: string })
   | (BaseEvent & { type: 'RUN_FINISHED' })
-  | (BaseEvent & { type: 'RUN_ERROR'; message?: string })
+  | (BaseEvent & { type: 'RUN_ERROR'; message?: string; code?: string })
   | (BaseEvent & { type: 'TOOL_CALL_START'; toolCallId: string; toolCallName: string })
   | (BaseEvent & { type: 'TOOL_CALL_ARGS'; toolCallId: string; delta: string })
   | (BaseEvent & { type: 'TOOL_CALL_END'; toolCallId: string })
