@@ -205,15 +205,23 @@ const App: React.FC = () => {
   }, [drafts, ensureSession, manager]);
 
   /**
-   * 重跑最后一轮：复用原提问、丢掉这次的回答。
-   * 只挂在最后一条 assistant 上——`retryLastTurn` 重跑的就是最后一轮。
+   * 重新生成某一条回答：复用那条提问、丢掉它之后的全部对话。
+   *
+   * 不是最后一条时要先确认——用户点的是"重来这句话"，代价是后面几轮一起消失。
    */
-  const handleRetryLatest = useCallback(() => {
-    const targetId = manager.activeMeta?.id;
-    if (!targetId) return;
+  const handleRetryMessage = useCallback(
+    (messageId: string) => {
+      const targetId = manager.activeMeta?.id;
+      if (!targetId) return;
 
-    manager.controllerOf(targetId).retryLastTurn();
-  }, [manager]);
+      const controller = manager.controllerOf(targetId);
+      const isLatest = controller.snapshot.at(-1)?.id === messageId;
+      if (!isLatest && !window.confirm('重新生成这条回答会丢弃它之后的全部对话，继续？')) return;
+
+      controller.retryLastTurn(messageId);
+    },
+    [manager],
+  );
 
   /** 推荐问题直接发：不经过输入框，但走同一条提交链路。 */
   const handlePick = useCallback(
@@ -336,7 +344,7 @@ const App: React.FC = () => {
           ) : (
             <>
               {history.notice !== '' && <div style={styles.notice}>{history.notice}</div>}
-              <MessageList messages={messages} onRetryLatest={handleRetryLatest} />
+              <MessageList messages={messages} onRetryMessage={handleRetryMessage} />
             </>
           )}
           {retryNotice !== '' && <div style={styles.notice}>{retryNotice}</div>}
@@ -711,14 +719,14 @@ function useSessionStatuses(
 
 interface MessageListProps {
   messages: UIMessage[];
-  /** 只挂到最后一条 assistant 上：retryLastTurn 重跑的是最后一轮 */
-  onRetryLatest?: () => void;
+  /** 重新生成某一条 assistant 回答（6-2）；不传则不出现按钮 */
+  onRetryMessage?: (messageId: string) => void;
 }
 
 /** 离底部多少像素以内算"贴底"。太小会被轻微抖动踢出，太大看起来像没贴住。 */
 const STICK_THRESHOLD_PX = 40;
 
-const MessageList: React.FC<MessageListProps> = ({ messages, onRetryLatest }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, onRetryMessage }) => {
   const listRef = useRef<HTMLDivElement | null>(null);
   /** 是否贴底：用 ref 存真相，避免"state 更新 → effect 重跑 → 又贴底"的循环。 */
   const pinRef = useRef(true);
@@ -771,11 +779,11 @@ const MessageList: React.FC<MessageListProps> = ({ messages, onRetryLatest }) =>
   return (
     <div style={styles.messageAreaWrap}>
       <div ref={listRef} style={styles.messageArea} onScroll={handleScroll} onWheel={handleWheel}>
-        {messages.map((message, index) => (
+        {messages.map(message => (
           <MessageBubble
             key={message.id}
             message={message}
-            onRetry={index === messages.length - 1 && message.role === 'assistant' ? onRetryLatest : undefined}
+            onRetry={message.role === 'assistant' ? () => onRetryMessage?.(message.id) : undefined}
           />
         ))}
       </div>
@@ -1096,6 +1104,7 @@ const SCENARIO_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'http-429', label: '错误·HTTP 429' },
   { value: 'http-500', label: '错误·HTTP 500' },
   { value: 'http-401', label: '错误·HTTP 401' },
+  { value: 'flaky', label: '自动重试·首次 500' },
   { value: 'cut:4', label: '错误·流中断' },
   { value: 'reset', label: '错误·连接重置' },
 ];

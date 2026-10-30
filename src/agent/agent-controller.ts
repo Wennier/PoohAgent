@@ -173,26 +173,38 @@ export class AgentController {
   }
 
   /**
-   * 重跑最后一轮：复用原 user 消息，丢掉它之后的回答（含 error part）。
+   * 重跑某一轮：复用那一轮的原 user 消息，丢掉它之后的全部内容。
    *
-   * 语义是"替换"不是"追加"——历史里始终只有一条提问。这也是 6-2 重新生成的后端。
+   * @param messageId 锚定的 assistant 消息；不传 = 最后一轮（手动重试）
+   * @returns 是否真的重跑了；生成中 / 找不到锚点 / 前面没有 user 时返回 false
    *
-   * 为什么丢掉旧 assistant 而不是清空它复用 id：
-   * `TEXT_MESSAGE_START` 只接管 `assistant_` 前缀的占位（ui-transform.ts:80），
-   * 旧 id 不符合任何一条接管条件，留下会变成一条没人认领的空消息。
-   * 而 `replaceId` 接管后 id 本来就会换成服务端的新 id，所以"复用保 React key"也拿不到。
+   * 为什么要丢掉**之后**的全部：后面的轮次是在"那条旧回答"的上下文里问出来的。
+   * 只替换回答、保留后续提问，会让协议历史里出现一条引用已消失内容的 user 消息。
    *
-   * @returns 是否真的重跑了；生成中或无 user 消息时返回 false
+   * 为什么不复用旧 assistant 的 id：`TEXT_MESSAGE_START` 只接管 `assistant_` 前缀的占位
+   *（ui-transform.ts:80），旧 id 不符合任何接管条件，留下会变成没人认领的空消息；
+   * 而接管后 id 本来也会换成服务端的新 id，"复用保 React key"拿不到。
    */
-  retryLastTurn(): boolean {
+  retryLastTurn(messageId?: string): boolean {
     if (this.status === AgentStatus.Generating) return false;
 
     const messages = this.store.snapshot;
-    const lastUserIndex = messages.findLastIndex(message => message.role === 'user');
-    if (lastUserIndex === -1) return false;
+    const anchorIndex =
+      messageId === undefined ? messages.length - 1 : messages.findIndex(message => message.id === messageId);
+    if (anchorIndex === -1) return false;
+
+    // 从锚点往前找最近的一条 user：assistant 的 id 与它的提问没有直接引用关系，只能这样反查
+    let userIndex = -1;
+    for (let index = anchorIndex; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex === -1) return false;
 
     // 截到提问为止，这之后完全走正常路径（占位 → 订阅 → 接管 id）
-    this.store.replaceAll(messages.slice(0, lastUserIndex + 1));
+    this.store.replaceAll(messages.slice(0, userIndex + 1));
 
     return this.runTurn();
   }

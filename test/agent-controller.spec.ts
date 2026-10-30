@@ -268,6 +268,50 @@ describe('AgentController · 自动重试接线（D11）', () => {
   });
 });
 
+describe('AgentController · 重新生成任意一轮（6-2）', () => {
+  it('指定更早的一条 assistant：截断到它的提问，之后的轮次一起丢弃', () => {
+    const { controller, fake } = createController();
+    controller.submit('第一轮', []);
+    fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
+    fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_1', delta: '答一' });
+    fake.finish();
+
+    controller.submit('第二轮', []);
+    fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_2' });
+    fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_2', delta: '答二' });
+    fake.finish();
+    assert.equal(controller.snapshot.length, 4);
+
+    assert.equal(controller.retryLastTurn('msg_1'), true);
+
+    const snapshot = controller.snapshot;
+    assert.equal(snapshot.length, 2, '第一轮提问 + 新占位');
+    assert.equal(getTextContent(snapshot[0]), '第一轮');
+    assert.equal(snapshot[1].parts.length, 0);
+  });
+
+  it('指定的 messageId 不存在：返回 false，不动 store', () => {
+    const { controller } = createController();
+    controller.submit('你好', []);
+    const before = controller.snapshot;
+
+    assert.equal(controller.retryLastTurn('msg_nope'), false);
+    assert.equal(controller.snapshot, before);
+  });
+
+  it('锚点是 user 消息本身时，等价重跑那一轮', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+    fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
+    fake.finish();
+    const userId = controller.snapshot[0].id;
+
+    assert.equal(controller.retryLastTurn(userId), true);
+    assert.equal(controller.snapshot.length, 2);
+    assert.equal(getTextContent(controller.snapshot[0]), '你好');
+  });
+});
+
 describe('AgentController · abort', () => {
   it('中止后回到 Ready，错误文案是「已取消」而不是失败', () => {
     const { controller, fake } = createController();
