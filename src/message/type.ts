@@ -86,6 +86,14 @@ export interface ErrorPart extends BasePart {
   message: string;
   /** 业务错误码，供渲染层决定样式或是否展示"重试"。 */
   code?: string;
+  /**
+   * UI 该不该给「重试」。
+   *
+   * 由**分类器**决定并写入（抛出来的错误由 controller 写）；
+   * 留空表示"没人判定过"，渲染层按 `code` 用 `classifyRunError` 推（RUN_ERROR 走这条）。
+   * 不用「有没有 code」来推：用户取消既没有码、也不该给重试。
+   */
+  retryable?: boolean;
 }
 
 /** 已知 part 的联合。Day 3 会追加 reasoning / tool。 */

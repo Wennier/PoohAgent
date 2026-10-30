@@ -351,9 +351,19 @@ export function createToolPart(id: string, name: string, result: string, args: s
   return { type: 'tool', id, name, result, args, status: 'done' };
 }
 
-/** 构造一个错误 part。 */
-export function createErrorPart(message: string, code?: string): ErrorPart {
-  return code ? { type: 'error', message, code } : { type: 'error', message };
+/**
+ * 构造一个错误 part。
+ *
+ * 三个可选字段用展开写法，保证"没传就不出现这个键"——
+ * 否则 `deepEqual` 会被 `code: undefined` 弄脏，快照折叠的守卫会误判。
+ */
+export function createErrorPart(message: string, code?: string, retryable?: boolean): ErrorPart {
+  return {
+    type: 'error',
+    message,
+    ...(code ? { code } : {}),
+    ...(retryable === undefined ? {} : { retryable }),
+  };
 }
 
 /** 兼容用：Day 2 里 assistant 消息的 parts 一定以 text 开头，这里给一个安全取值。 */
