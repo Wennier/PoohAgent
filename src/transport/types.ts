@@ -58,6 +58,13 @@ export interface ChatRequestBody {
    */
   thread_id: string;
   /**
+   * 幂等键：**一次提交一个**，跨自动重试复用同一个值。
+   *
+   * 服务端据此把"重发"识别成同一轮，而不是第二轮（500 这类可能已执行的失败靠它兜底）。
+   * 客户端每次重试**重新生成**这个键，是最常见的实现错误——那样服务端永远去不了重。
+   */
+  request_id?: string;
+  /**
    * 全量历史消息。
    *
    * 网关自己取最后一条发给 Agent，所以不要只传最后一条——重生成（Day 6）
@@ -148,6 +155,13 @@ export interface ConnectInput {
   channel: string;
   /** 中止信号。 */
   signal: AbortSignal;
+  /**
+   * 幂等键。由**调用方在提交时生成一次**，重试时原样透传。
+   *
+   * 不在这里生成：`buildChatBody` 每次尝试都会被调用，在这里生成等于每次重试换新键。
+   * 不传 = 放弃幂等保护（旧测试与脚本可以不带）。
+   */
+  requestId?: string;
   /** 语言，可选。 */
   language?: string;
   /** 品类参数对象；内部会 stringify 进 contexts[0].params。 */

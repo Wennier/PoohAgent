@@ -80,4 +80,23 @@ describe('buildChatBody', () => {
     assert.equal(wire.contexts[0].channel, 'doc');
     assert.equal(typeof wire.contexts[0].params, 'string');
   });
+
+  it('requestId 透传成 request_id（snake_case）', () => {
+    const body = buildChatBody(makeInput({ requestId: 'req_abc' }));
+
+    assert.equal(body.request_id, 'req_abc');
+    assert.equal('requestId' in body, false, '协议里只有 snake_case');
+  });
+
+  it('没有 requestId 时不出现该字段（不给旧调用方造假象）', () => {
+    const body = buildChatBody(makeInput());
+
+    assert.equal('request_id' in body, false);
+  });
+
+  it('同一个 requestId 多次组装，body 完全相同（重试可复用）', () => {
+    const input = makeInput({ requestId: 'req_same' });
+
+    assert.deepEqual(buildChatBody(input), buildChatBody(input));
+  });
 });

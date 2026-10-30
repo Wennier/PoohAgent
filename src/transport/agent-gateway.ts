@@ -67,10 +67,13 @@ export function buildChatBody(input: ConnectInput): ChatRequestBody {
   //         对象合并顺序建议：先 params 再显式字段，避免 channel 被参数里的同名字段覆盖
   // 步骤 3：return { thread_id: threadId, messages, contexts: [ctx] }
   // TODO(wendy): 实现上面三步
-  const { threadId, messages, channel, language, params } = input;
+  const { threadId, messages, channel, language, params, requestId } = input;
   const ctx = { channel, language, params: JSON.stringify(params) };
   return {
     thread_id: threadId,
+    // 幂等键原样透传（由调用方在提交时生成一次）。不传就不出现这个字段，
+    // 避免给旧调用方造出"看起来有幂等、其实每次不同"的假象。
+    ...(requestId ? { request_id: requestId } : {}),
     messages,
     contexts: [ctx],
   };
