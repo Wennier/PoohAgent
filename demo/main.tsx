@@ -101,9 +101,23 @@ function formatEvent(event: AgentEvent): LogLine {
 // App
 // ============================================================
 
+/** 自动重试的回执信息（来自 transport/retry，UI 只读不推）。 */
+interface RetryNoticeInfo {
+  retryIndex: number;
+  maxRetries: number;
+  delayMs: number;
+}
+
 const App: React.FC = () => {
   const { logs, appendLog, clearLogs } = useLogs();
-  const { manager, sessions, activeId } = useSessions(appendLog);
+  const [retryNotice, setRetryNotice] = useState('');
+
+  const handleRetryNotice = useCallback((info: RetryNoticeInfo) => {
+    const delay = info.delayMs >= 1000 ? `${(info.delayMs / 1000).toFixed(1)} 秒` : `${info.delayMs} 毫秒`;
+    setRetryNotice(`网络不稳，正在自动重试 ${info.retryIndex + 1}/${info.maxRetries}（约 ${delay}后）`);
+  }, []);
+
+  const { manager, sessions, activeId } = useSessions(appendLog, handleRetryNotice);
 
   // 依赖 activeId 而不是 activeId$：换会话就换 controller，订阅跟着换
   const controller = useMemo(
@@ -111,6 +125,14 @@ const App: React.FC = () => {
     [manager, activeId],
   );
   const { messages, status, threadId } = useActiveStream(controller);
+
+  // 提示只活到"这一轮结束"或"新内容到达"为止
+  useEffect(() => {
+    if (status !== AgentStatus.Generating) setRetryNotice('');
+  }, [status]);
+  useEffect(() => {
+    setRetryNotice('');
+  }, [messages]);
   const statuses = useSessionStatuses(manager, sessions);
 
   /** 启动：拉会话列表 → 灌进 manager → 恢复上次停的位置（P2）。 */
@@ -181,6 +203,17 @@ const App: React.FC = () => {
       setDrafts(previous => ({ ...previous, [targetId]: EMPTY_DRAFT }));
     }
   }, [drafts, ensureSession, manager]);
+
+  /**
+   * 重跑最后一轮：复用原提问、丢掉这次的回答。
+   * 只挂在最后一条 assistant 上——`retryLastTurn` 重跑的就是最后一轮。
+   */
+  const handleRetryLatest = useCallback(() => {
+    const targetId = manager.activeMeta?.id;
+    if (!targetId) return;
+
+    manager.controllerOf(targetId).retryLastTurn();
+  }, [manager]);
 
   /** 推荐问题直接发：不经过输入框，但走同一条提交链路。 */
   const handlePick = useCallback(
@@ -303,9 +336,10 @@ const App: React.FC = () => {
           ) : (
             <>
               {history.notice !== '' && <div style={styles.notice}>{history.notice}</div>}
-              <MessageList messages={messages} />
+              <MessageList messages={messages} onRetryLatest={handleRetryLatest} />
             </>
           )}
+          {retryNotice !== '' && <div style={styles.notice}>{retryNotice}</div>}
           <Composer
             draft={activeDraft.text}
             images={activeDraft.images}
@@ -398,7 +432,10 @@ interface SessionsApi {
  * 组件层仍然只做三件事：造实例、订阅、转发命令 —— 会话状态、消息、状态机
  * 都在各自的 AgentController 里，切换会话只是换一个被订阅的实例。
  */
-function useSessions(appendLog: (text: string, tone?: LogEntry['tone']) => void): SessionsApi {
+function useSessions(
+  appendLog: (text: string, tone?: LogEntry['tone']) => void,
+  onRetryNotice?: (info: RetryNoticeInfo) => void,
+): SessionsApi {
   const [manager] = useState(
     () =>
       new SessionManager({
@@ -411,6 +448,8 @@ function useSessions(appendLog: (text: string, tone?: LogEntry['tone']) => void)
               const line = formatEvent(event);
               appendLog(`[${shortSessionId(sessionId)}] ${line.text}`, line.tone);
             },
+            // 自动重试只在这一层知道「第几次、等多久」，UI 不该自己猜
+            retryOptions: { onRetry: info => onRetryNotice?.(info) },
           }),
         pointer: createLocalStoragePointer(),
         // 标题规则属于产品层：会话层只负责"什么时候提升"，不解析消息
@@ -672,12 +711,14 @@ function useSessionStatuses(
 
 interface MessageListProps {
   messages: UIMessage[];
+  /** 只挂到最后一条 assistant 上：retryLastTurn 重跑的是最后一轮 */
+  onRetryLatest?: () => void;
 }
 
 /** 离底部多少像素以内算"贴底"。太小会被轻微抖动踢出，太大看起来像没贴住。 */
 const STICK_THRESHOLD_PX = 40;
 
-const MessageList: React.FC<MessageListProps> = ({ messages }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, onRetryLatest }) => {
   const listRef = useRef<HTMLDivElement | null>(null);
   /** 是否贴底：用 ref 存真相，避免"state 更新 → effect 重跑 → 又贴底"的循环。 */
   const pinRef = useRef(true);
@@ -730,8 +771,12 @@ const MessageList: React.FC<MessageListProps> = ({ messages }) => {
   return (
     <div style={styles.messageAreaWrap}>
       <div ref={listRef} style={styles.messageArea} onScroll={handleScroll} onWheel={handleWheel}>
-        {messages.map(message => (
-          <MessageBubble key={message.id} message={message} />
+        {messages.map((message, index) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onRetry={index === messages.length - 1 && message.role === 'assistant' ? onRetryLatest : undefined}
+          />
         ))}
       </div>
 
@@ -806,7 +851,7 @@ const COPY_LABEL: Record<CopyState, string> = {
   failed: '复制失败',
 };
 
-const MessageBubble: React.FC<{ message: UIMessage }> = ({ message }) => {
+const MessageBubble: React.FC<{ message: UIMessage; onRetry?: () => void }> = ({ message, onRetry }) => {
   const isUser = message.role === 'user';
   /** 可复制的纯文本：只取 text part，工具卡与错误不参与。 */
   const copyable = getTextContent(message);
@@ -833,7 +878,7 @@ const MessageBubble: React.FC<{ message: UIMessage }> = ({ message }) => {
           <div style={styles.pendingText}>正在思考…</div>
         ) : (
           message.parts.map((part, index) => (
-            <React.Fragment key={`${message.id}-${index}`}>{renderPart(part)}</React.Fragment>
+            <React.Fragment key={`${message.id}-${index}`}>{renderPart(part, { onRetry })}</React.Fragment>
           ))
         )}
 

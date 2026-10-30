@@ -82,6 +82,8 @@ interface WireContentPart {
 interface ChatInput {
   /** 新会话传空串；网关只在 RUN_STARTED 里回填真实 ID。 */
   thread_id?: string;
+  /** 幂等键：一次提交一个，跨自动重试复用。 */
+  request_id?: string;
   messages?: WireMessage[];
   /** 网关只取第一个元素。 */
   contexts?: { channel?: string; language?: string; params?: string }[];
@@ -342,6 +344,12 @@ type ErrorScenario =
   | { kind: 'cut'; after: number }
   | { kind: 'reset' };
 
+/** flaky 剧本还要注入几次 500。 */
+let flakyRemaining = 1;
+
+/** 每个会话最近一次的 request_id，只用于自检告警。 */
+const lastRequestIdByThread = new Map<string, string>();
+
 /** 业务码 → 文案。未知码不猜。 */
 const RUN_ERROR_MESSAGES: Record<string, string> = {
   '439902': '未登录',
@@ -350,7 +358,13 @@ const RUN_ERROR_MESSAGES: Record<string, string> = {
   '439907': '积分不足',
 };
 
-type ResolvedScenario = { content: ContentScenario } | { error: ErrorScenario };
+/**
+ * `flaky`：第一次 500，之后正常。
+ *
+ * 用来验证自动重试"真的重发了、而且第二次能恢复"——纯 429/500 剧本只能看到重试，
+ * 看不到恢复。
+ */
+type ResolvedScenario = { content: ContentScenario; flaky?: boolean } | { error: ErrorScenario };
 
 /** 从 query 选剧本；不认识的取值回落 normal，避免手抖打错就 500。 */
 function resolveScenario(url: URL): ResolvedScenario {
@@ -358,6 +372,9 @@ function resolveScenario(url: URL): ResolvedScenario {
   if (!raw) return { content: 'normal' };
 
   const [name, arg] = raw.split(':');
+
+  // flaky：内容走 normal，但第一次请求注入 500（计数在 handleChat 里，解析保持无状态）
+  if (name === 'flaky') return { content: 'normal', flaky: true };
 
   if (name === 'error-run') return { error: { kind: 'run', code: arg || '439906' } };
   if (name === 'reset') return { error: { kind: 'reset' } };
@@ -634,6 +651,29 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   const input = parseChatInput(rawBody);
   const threadId = resolveThreadId(input);
   const resolved = resolveScenario(url);
+
+  // 幂等键自检：同一个会话（新会话的 thread_id 是空串，正好可以当 key）出现第二个不同的键，
+  // 说明调用方在重试时重新生成了键——那样服务端永远去不了重。
+  const requestId = input.request_id;
+  if (requestId) {
+    const key = input.thread_id ?? '';
+    const previous = lastRequestIdByThread.get(key);
+    if (previous !== undefined && previous !== requestId) {
+      console.warn(
+        `[mock] ⚠ 同一会话出现新 request_id（${previous} → ${requestId}）：` +
+          '若发生在重试期间，说明每次重试都换了新键，服务端将无法去重',
+      );
+    }
+    lastRequestIdByThread.set(key, requestId);
+  }
+
+  // 故障注入：第一次 500，之后正常
+  if ('content' in resolved && resolved.flaky && flakyRemaining > 0) {
+    flakyRemaining -= 1;
+    sendHttpError(res, 500);
+    console.log('[mock] ✗ flaky：注入一次 500');
+    return;
+  }
 
   // 取最后一条 user：客户端提交时末尾还有一条空的 assistant 占位，不能直接取末尾
   const incomingUser = [...(input.messages ?? [])].reverse().find(message => message.role === 'user');
