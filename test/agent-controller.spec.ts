@@ -14,28 +14,31 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import type { Observable } from 'rxjs';
-import { Subject } from 'rxjs';
+import { of, Subject } from 'rxjs';
 
 import { AgentController, AgentStatus } from '../src/agent/agent-controller';
-import type { ImageInput } from '../src/agent/agent-controller';
+import type { AgentControllerOptions, ImageInput } from '../src/agent/agent-controller';
 import type { ErrorPart } from '../src/message/type';
 import { getTextContent } from '../src/message/type';
 import { aggregateSnapshot } from '../src/message/ui-transform';
 import { AgentHttpError } from '../src/transport/agent-gateway';
-import type { AgentEvent } from '../src/transport/types';
+import type { AgentEvent, ConnectInput } from '../src/transport/types';
 
-/** 造一个可以手动推送事件的假连接。 */
+/** 造一个可以手动推送事件的假连接，并记录每次尝试的入参（验证幂等键复用）。 */
 function createFakeConnect(): {
-  connect: () => Observable<AgentEvent>;
+  connect: (input: ConnectInput) => Observable<AgentEvent>;
   emit: (event: AgentEvent) => void;
   finish: () => void;
   fail: (error: unknown) => void;
   callCount: () => number;
+  inputs: ConnectInput[];
 } {
   const subjects: Subject<AgentEvent>[] = [];
+  const inputs: ConnectInput[] = [];
 
   return {
-    connect: () => {
+    connect: (input: ConnectInput) => {
+      inputs.push(input);
       const subject = new Subject<AgentEvent>();
       subjects.push(subject);
       return subject.asObservable();
@@ -44,10 +47,11 @@ function createFakeConnect(): {
     finish: () => subjects.at(-1)?.complete(),
     fail: error => subjects.at(-1)?.error(error),
     callCount: () => subjects.length,
+    inputs,
   };
 }
 
-function createController(): {
+function createController(patch: Partial<AgentControllerOptions> = {}): {
   controller: AgentController;
   fake: ReturnType<typeof createFakeConnect>;
   events: AgentEvent[];
@@ -55,8 +59,11 @@ function createController(): {
   const fake = createFakeConnect();
   const events: AgentEvent[] = [];
   const controller = new AgentController({
-    connect: fake.connect as never,
+    connect: fake.connect,
     onEvent: event => events.push(event),
+    // 默认关掉自动重试：这些用例要精确控制"第几次尝试"，不能让 500 自己变成 3 次
+    autoRetry: false,
+    ...patch,
   });
 
   return { controller, fake, events };
@@ -183,6 +190,81 @@ describe('AgentController · submit', () => {
     const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
     assert.equal(last.message, '已取消');
     assert.equal(last.code, undefined);
+    assert.equal(last.retryable, false, 'UI 不能给取消按钮');
+  });
+
+  it('可恢复的错误在 part 上标 retryable，渲染层不用自己猜', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+
+    fake.fail(new AgentHttpError(500, null));
+
+    const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
+    assert.equal(last.retryable, true);
+  });
+
+  it('RUN_ERROR 走归约层，不写 retryable（留给渲染层按业务码推）', () => {
+    const { controller, fake } = createController();
+    controller.submit('你好', []);
+
+    fake.emit({ type: 'RUN_ERROR', message: '请求太频繁，请稍后再试', code: '439906' });
+
+    const last = controller.snapshot[1].parts.at(-1) as ErrorPart;
+    assert.equal(last.code, '439906');
+    assert.equal(last.retryable, undefined);
+  });
+});
+
+describe('AgentController · 自动重试接线（D11）', () => {
+  /** 把等待换成立即完成，否则用例要真等 400ms。 */
+  const FAST_RETRY = { schedule: () => of(0), random: () => 1, baseDelayMs: 1 };
+
+  it('500 自动重发一次，重试成功的回答落到占位里，不留错误', () => {
+    const { controller, fake } = createController({ autoRetry: true, retryOptions: FAST_RETRY });
+    controller.submit('你好', []);
+    assert.equal(fake.callCount(), 1);
+
+    fake.fail(new AgentHttpError(500, null));
+
+    assert.equal(fake.callCount(), 2, '没吐过事件的 500 值得重发');
+    fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_2' });
+    fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_2', delta: '重试成功' });
+
+    const parts = controller.snapshot[1].parts;
+    assert.equal(parts.filter(part => part.type === 'error').length, 0);
+    assert.match(getTextContent(controller.snapshot[1]), /重试成功/);
+  });
+
+  it('两次尝试用同一个 requestId（幂等键不能每次换）', () => {
+    const { controller, fake } = createController({ autoRetry: true, retryOptions: FAST_RETRY });
+    controller.submit('你好', []);
+
+    fake.fail(new AgentHttpError(500, null));
+
+    assert.equal(fake.inputs.length, 2);
+    assert.ok(fake.inputs[0].requestId, '每次提交都该带上键');
+    assert.equal(fake.inputs[0].requestId, fake.inputs[1].requestId);
+  });
+
+  it('401 不自动重发（永久失败重试没有意义）', () => {
+    const { controller, fake } = createController({ autoRetry: true, retryOptions: FAST_RETRY });
+    controller.submit('你好', []);
+
+    fake.fail(new AgentHttpError(401, null));
+
+    assert.equal(fake.callCount(), 1);
+    assert.equal((controller.snapshot[1].parts.at(-1) as ErrorPart).code, '401');
+  });
+
+  it('新的提交换一个新键（只有同一次提交的重试才复用）', () => {
+    const { controller, fake } = createController();
+    controller.submit('第一轮', []);
+    fake.finish();
+
+    controller.submit('第二轮', []);
+
+    assert.equal(fake.inputs.length, 2);
+    assert.notEqual(fake.inputs[0].requestId, fake.inputs[1].requestId);
   });
 });
 
@@ -293,5 +375,67 @@ describe('AgentController · 附件（图片）', () => {
     );
 
     assert.deepEqual(restored.parts, controller.snapshot[0].parts, '发出去再读回来，parts 必须一模一样');
+  });
+});
+
+describe('AgentController · retryLastTurn', () => {
+  /** 跑到"已经出错"的状态：一轮失败的回答（含 error part）落在屏上。 */
+  function failOneTurn(): ReturnType<typeof createController> {
+    const ctx = createController();
+    ctx.controller.submit('你好', []);
+    ctx.fake.emit({ type: 'TEXT_MESSAGE_START', messageId: 'msg_1' });
+    ctx.fake.emit({ type: 'TEXT_MESSAGE_CONTENT', messageId: 'msg_1', delta: '半截' });
+    ctx.fake.fail(new TypeError('terminated'));
+
+    return ctx;
+  }
+
+  it('不新增 user 消息，且旧回答（含 error part）被丢掉', () => {
+    const { controller, fake } = failOneTurn();
+    assert.equal(controller.snapshot.length, 2, '重试前：user + 失败的回答');
+
+    assert.equal(controller.retryLastTurn(), true);
+
+    const snapshot = controller.snapshot;
+    assert.equal(snapshot.filter(message => message.role === 'user').length, 1, '提问只有一条');
+    assert.equal(snapshot.length, 2, '旧回答被替换成新的占位，不是追加');
+    assert.equal(snapshot[1].parts.length, 0, '新回答是空的占位');
+    assert.equal(snapshot[0].parts[0]?.type === 'text' ? snapshot[0].parts[0].content : '', '你好');
+    assert.equal(fake.callCount(), 2, '真的又发了一次请求');
+  });
+
+  it('重试后的协议历史里只有一条 user（不污染上下文）', () => {
+    const { controller } = failOneTurn();
+
+    controller.retryLastTurn();
+
+    const history = controller.buildWireHistory();
+    assert.equal(history.filter(message => message.role === 'user').length, 1);
+  });
+
+  it('没有 user 消息时返回 false，且不改动 store', () => {
+    const { controller } = createController();
+    const before = controller.snapshot;
+
+    assert.equal(controller.retryLastTurn(), false);
+    assert.equal(controller.snapshot, before);
+  });
+
+  it('生成中不允许重试', () => {
+    const { controller } = failOneTurn();
+    controller.retryLastTurn();
+    assert.equal(controller.status, AgentStatus.Generating);
+
+    assert.equal(controller.retryLastTurn(), false, '不能产生两条在途流');
+  });
+
+  it('历史里只有一条 user（没有 assistant 残留）时也能重跑', () => {
+    const { controller } = createController();
+    controller.loadSnapshot([{ id: 'user_1', role: 'user', content: '你好' }]);
+    assert.equal(controller.snapshot.length, 1);
+
+    assert.equal(controller.retryLastTurn(), true);
+    assert.equal(controller.snapshot.length, 2);
+    assert.equal(controller.snapshot[1].parts.length, 0);
   });
 });

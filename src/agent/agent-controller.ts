@@ -34,6 +34,7 @@ import {
 import { aggregateSnapshot, applyLiveEvent, createErrorPart, createTextPart } from '../message/ui-transform';
 import { toWireContentParts } from '../message/wire-content';
 import { connectAgentStream } from '../transport/agent-gateway';
+import { withRetry, type RetryOptions } from '../transport/retry';
 import type { AgentEvent, WireMessage } from '../transport/types';
 import { classifyThrown } from './error-classify';
 
@@ -50,6 +51,10 @@ export interface AgentControllerOptions {
   onEvent?: (event: AgentEvent) => void;
   /** 可注入的连接函数，测试时替换成假的。默认用真实的 connectAgentStream。 */
   connect?: typeof connectAgentStream;
+  /** 自动重试（L1）。默认开；测试里关掉，避免每次失败都变成 3 次尝试。 */
+  autoRetry?: boolean;
+  /** 透传给 withRetry 的调参（测试注入 schedule/random 用）。谓词不开放注入。 */
+  retryOptions?: Omit<RetryOptions, 'shouldRetry'>;
 }
 
 export interface ImageInput {
@@ -164,6 +169,42 @@ export class AgentController {
       parts,
     });
 
+    return this.runTurn();
+  }
+
+  /**
+   * 重跑最后一轮：复用原 user 消息，丢掉它之后的回答（含 error part）。
+   *
+   * 语义是"替换"不是"追加"——历史里始终只有一条提问。这也是 6-2 重新生成的后端。
+   *
+   * 为什么丢掉旧 assistant 而不是清空它复用 id：
+   * `TEXT_MESSAGE_START` 只接管 `assistant_` 前缀的占位（ui-transform.ts:80），
+   * 旧 id 不符合任何一条接管条件，留下会变成一条没人认领的空消息。
+   * 而 `replaceId` 接管后 id 本来就会换成服务端的新 id，所以"复用保 React key"也拿不到。
+   *
+   * @returns 是否真的重跑了；生成中或无 user 消息时返回 false
+   */
+  retryLastTurn(): boolean {
+    if (this.status === AgentStatus.Generating) return false;
+
+    const messages = this.store.snapshot;
+    const lastUserIndex = messages.findLastIndex(message => message.role === 'user');
+    if (lastUserIndex === -1) return false;
+
+    // 截到提问为止，这之后完全走正常路径（占位 → 订阅 → 接管 id）
+    this.store.replaceAll(messages.slice(0, lastUserIndex + 1));
+
+    return this.runTurn();
+  }
+
+  /**
+   * 启动一轮：占位 → 置 Generating → 建 AbortController → 订阅。
+   *
+   * `submit` 与 `retryLastTurn` 共用；**调用方负责状态门禁**，因为门禁必须在写 store 之前。
+   *
+   * @internal
+   */
+  private runTurn(): boolean {
     this.store.push(createAssistantPlaceholder());
     this.liveCtx.currentAssistantId = null;
 
@@ -171,7 +212,20 @@ export class AgentController {
     const controller = new AbortController();
     this.abortController = controller;
     const messages = this.buildWireHistory();
-    const connect = this.options.connect ?? connectAgentStream;
+
+    // 幂等键：一次提交生成一个，跨自动重试复用（重试由 withRetry 在原函数内部续接，
+    // 所以这里只生成一次就够了——换一次提交才换一个键）。
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    const rawConnect = this.options.connect ?? connectAgentStream;
+    const connect =
+      this.options.autoRetry === false
+        ? rawConnect
+        : withRetry(rawConnect, {
+            ...this.options.retryOptions,
+            // 谓词是我们的：只有分类器说"可自动重试"才重发（4xx 永久失败、已吐事件都不重发）
+            shouldRetry: (error, receivedEvent) => classifyThrown(error, { receivedEvent }).autoRetryable,
+          });
 
     /**
      * 收尾：把状态交还给 Ready。
@@ -202,6 +256,7 @@ export class AgentController {
       messages,
       channel: 'doc',
       signal: controller.signal,
+      requestId,
     }).subscribe({
       next: (event: AgentEvent) => {
         receivedEvent = true;
@@ -220,7 +275,7 @@ export class AgentController {
       error: (error: unknown) => {
         // 分类在这里做，而不是在渲染层：只有这一层同时知道「异常是什么」和「流有没有开始」
         const classified = classifyThrown(error, { receivedEvent });
-        this.appendError(classified.text, classified.code);
+        this.appendError(classified.text, classified.code, classified.manualRetryable);
 
         finish();
       },
@@ -275,11 +330,11 @@ export class AgentController {
     });
   }
 
-  /** 供派生逻辑使用：把一段错误追加到当前回答末尾（已给好）。 */
-  appendError(message: string, code?: string): void {
+  /** 把一段错误追加到当前回答末尾。`retryable` 决定 UI 出不出「重试」按钮。 */
+  appendError(message: string, code?: string, retryable?: boolean): void {
     const last = this.store.snapshot.at(-1);
     const targetId = last?.role === 'assistant' ? last.id : createAssistantPlaceholder().id;
-    this.store.appendPart(targetId, createErrorPart(message, code));
+    this.store.appendPart(targetId, createErrorPart(message, code, retryable));
   }
 
   /** @internal 供 submit 内部使用，外部不要调。 */
