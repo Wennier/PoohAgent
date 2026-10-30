@@ -10,16 +10,24 @@
  * 后续各批次只需要替换对应区块的实现，不必重排页面结构。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 
 import 'highlight.js/styles/github.css';
 
+import type { Subscription } from 'rxjs';
+
 import { AgentController, AgentStatus, type ImageInput } from 'src/agent/agent-controller';
 import { getTextContent, type UIMessage } from 'src/message/type';
 import { renderPart } from 'src/render/part-renderer';
+import { createLocalStoragePointer } from 'src/session/pointer';
+import { SessionManager } from 'src/session/session-manager';
+import type { SessionMeta } from 'src/session/types';
 import { connectAgentStream } from 'src/transport/agent-gateway';
-import type { AgentEvent, WireMessage } from 'src/transport/types';
+import { fetchHistory, fetchRuntimes, deleteRuntime } from 'src/transport/session-gateway';
+import type { AgentEvent, RuntimeSummary, WireMessage } from 'src/transport/types';
+
+import { SessionList } from './session-list';
 
 // ============================================================
 // 类型
@@ -46,6 +54,10 @@ function resolveAgentUrl(): string {
 
   return scenario ? `/api/v6/agentgateway/chat?scenario=${encodeURIComponent(scenario)}` : '/api/v6/agentgateway/chat';
 }
+
+/** 会话列表与历史（Day 5）。走同一个 vite proxy，路径与真实网关一致。 */
+const RUNTIMES_URL = '/api/v6/agentgateway/runtimes';
+const HISTORY_URL = '/api/v6/agentgateway/history';
 
 /**
  * 把一条事件转成一行可读日志。
@@ -91,31 +103,148 @@ function formatEvent(event: AgentEvent): LogLine {
 
 const App: React.FC = () => {
   const { logs, appendLog, clearLogs } = useLogs();
-  const [draft, setDraft] = useState('');
-  /** 本轮要随消息发出去的图片：粘贴得到的 data URL。 */
-  const [draftImages, setDraftImages] = useState<ImageInput[]>([]);
-  const { messages, status, threadId, submit, abort, loadSnapshot } = useAgent(appendLog);
+  const { manager, sessions, activeId } = useSessions(appendLog);
+
+  // 依赖 activeId 而不是 activeId$：换会话就换 controller，订阅跟着换
+  const controller = useMemo(
+    () => (activeId === null ? null : manager.controllerOf(activeId)),
+    [manager, activeId],
+  );
+  const { messages, status, threadId } = useActiveStream(controller);
+  const statuses = useSessionStatuses(manager, sessions);
+
+  /** 启动：拉会话列表 → 灌进 manager → 恢复上次停的位置（P2）。 */
+  const { booting, error: bootError, retry: retryBootstrap } = useBootstrap(manager);
+  const activeMeta = activeId === null ? null : manager.activeMeta;
+  /** 激活一个还没加载过的历史会话时拉消息（5-4）。 */
+  const history = useSessionHistory(manager, controller, activeMeta);
+
+  /** 每个会话一份输入草稿：切走再切回来，没发出去的内容还在（E2）。 */
+  const [drafts, setDrafts] = useState<Record<string, SessionDraft>>({});
+  const activeDraft = activeId === null ? EMPTY_DRAFT : (drafts[activeId] ?? EMPTY_DRAFT);
+  /** 删除失败提示（服务端没删掉时不能只删本地，否则刷新会"复活"）。 */
+  const [deleteError, setDeleteError] = useState('');
 
   const isStreaming = status === AgentStatus.Generating;
 
+  /** 空态下第一次输入/发送时，先落一个草稿会话（不进列表）。 */
+  const ensureSession = useCallback((): string => activeId ?? manager.createDraft(), [activeId, manager]);
+
+  // 草稿提升由 SessionManager 订阅各自的 threadId$ 完成（见 controllerOf）：
+  // 不能在这里用「当前活动会话的 threadId 状态」判断——切换会话那一帧它是旧值，
+  // 会把新草稿提升成旧会话的 threadId，表现就是"点新建又被弹回旧会话"。
+
+  const handleDraftChange = useCallback(
+    (text: string) => {
+      const targetId = ensureSession();
+      setDrafts(previous => ({
+        ...previous,
+        [targetId]: { ...(previous[targetId] ?? EMPTY_DRAFT), text },
+      }));
+    },
+    [ensureSession],
+  );
+
+  const handleAddImage = useCallback(
+    (image: ImageInput) => {
+      const targetId = ensureSession();
+      setDrafts(previous => ({
+        ...previous,
+        [targetId]: {
+          ...(previous[targetId] ?? EMPTY_DRAFT),
+          images: [...(previous[targetId]?.images ?? []), image],
+        },
+      }));
+    },
+    [ensureSession],
+  );
+
+  const handleRemoveImage = useCallback(
+    (index: number) => {
+      if (activeId === null) return;
+
+      setDrafts(previous => {
+        const draft = previous[activeId] ?? EMPTY_DRAFT;
+        return { ...previous, [activeId]: { ...draft, images: draft.images.filter((_, i) => i !== index) } };
+      });
+    },
+    [activeId],
+  );
+
   const handleSend = useCallback(() => {
+    const targetId = ensureSession();
+    const draft = drafts[targetId] ?? EMPTY_DRAFT;
+
     // 只有真的发出去（状态门禁通过）才清空草稿与附件，
     // 否则「生成中被拒」会把用户刚粘的图弄丢。
-    if (submit(draft, draftImages)) {
-      setDraft('');
-      setDraftImages([]);
+    if (manager.controllerOf(targetId).submit(draft.text, draft.images)) {
+      setDrafts(previous => ({ ...previous, [targetId]: EMPTY_DRAFT }));
     }
-  }, [draft, draftImages, submit]);
+  }, [drafts, ensureSession, manager]);
 
-  const handleDraftChange = useCallback((next: string) => setDraft(next), []);
+  /** 推荐问题直接发：不经过输入框，但走同一条提交链路。 */
+  const handlePick = useCallback(
+    (text: string) => {
+      manager.controllerOf(ensureSession()).submit(text, []);
+    },
+    [ensureSession, manager],
+  );
 
-  const handleAddImage = useCallback((image: ImageInput) => {
-    setDraftImages(previous => [...previous, image]);
-  }, []);
+  const handleCreate = useCallback(() => {
+    setDeleteError('');
 
-  const handleRemoveImage = useCallback((index: number) => {
-    setDraftImages(previous => previous.filter((_, i) => i !== index));
-  }, []);
+    const meta = manager.activeMeta;
+    // 已经停在一个空草稿上：不重复创建，避免留下看不见的孤儿草稿
+    if (meta?.kind === 'draft' && manager.controllerOf(meta.id).snapshot.length === 0) return;
+
+    manager.createDraft();
+  }, [manager]);
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      setDeleteError('');
+      manager.activate(id);
+    },
+    [manager],
+  );
+
+  /**
+   * 删除会话：**先服务端、再本地**。
+   *
+   * 反过来的话，服务端删失败时列表已经空了，刷新又会"复活"——
+   * 用户会以为删除是坏的。
+   */
+  const handleRemove = useCallback(
+    async (id: string) => {
+      setDeleteError('');
+
+      try {
+        await deleteRuntime({ url: RUNTIMES_URL, threadId: id });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+
+        // 404 = 服务端本来就没有了，等同于删除成功
+        if (!message.includes('HTTP 404')) {
+          setDeleteError(message);
+          return;
+        }
+      }
+
+      setDrafts(previous => {
+        if (!(id in previous)) return previous;
+
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+
+      manager.remove(id);
+    },
+    [manager],
+  );
+
+  const handleAbort = useCallback(() => controller?.abort(), [controller]);
+  const handleLoadSnapshot = useCallback(() => controller?.loadSnapshot(SNAPSHOT_FIXTURE), [controller]);
 
   return (
     <div style={styles.page}>
@@ -130,28 +259,63 @@ const App: React.FC = () => {
             status:
             {status}
           </span>
-          <button type="button" style={styles.buttonTiny} onClick={loadSnapshot}>
+          <button type="button" style={styles.buttonTiny} onClick={handleLoadSnapshot}>
             载入历史快照（模拟）
           </button>
         </div>
       </header>
 
       <main style={styles.main}>
+        <aside style={styles.sessionColumn}>
+          <SessionList
+            sessions={sessions}
+            activeId={activeId}
+            statuses={statuses}
+            loading={booting}
+            errorText={deleteError}
+            onSelect={handleSelect}
+            onCreate={handleCreate}
+            onRemove={handleRemove}
+          />
+        </aside>
+
         <section style={styles.chatColumn}>
-          {messages.length === 0 ? (
-            <EmptyTip disabled={isStreaming} onPick={submit} />
+          {booting ? (
+            <div style={styles.centerTip}>正在加载会话…</div>
+          ) : bootError !== '' ? (
+            <div style={styles.centerTip}>
+              <span>会话列表加载失败：{bootError}</span>
+              <button type="button" style={styles.buttonTiny} onClick={retryBootstrap}>
+                重试
+              </button>
+            </div>
+          ) : history.state === 'loading' ? (
+            <div style={styles.centerTip}>正在加载历史…</div>
+          ) : history.state === 'error' ? (
+            <div style={styles.centerTip}>
+              <span>历史加载失败：{history.error}</span>
+              <button type="button" style={styles.buttonTiny} onClick={history.retry}>
+                重试
+              </button>
+            </div>
+          ) : messages.length === 0 ? (
+            <EmptyTip disabled={isStreaming} onPick={handlePick} />
           ) : (
-            <MessageList messages={messages} />
+            <>
+              {history.notice !== '' && <div style={styles.notice}>{history.notice}</div>}
+              <MessageList messages={messages} />
+            </>
           )}
           <Composer
-            draft={draft}
-            images={draftImages}
+            draft={activeDraft.text}
+            images={activeDraft.images}
             streaming={isStreaming}
+            disabled={history.state === 'loading'}
             onDraftChange={handleDraftChange}
             onAddImage={handleAddImage}
             onRemoveImage={handleRemoveImage}
             onSend={handleSend}
-            onAbort={abort}
+            onAbort={handleAbort}
           />
         </section>
 
@@ -167,15 +331,25 @@ const App: React.FC = () => {
 // 接入层：把 AgentController 挂进 React
 // ============================================================
 
-interface AgentApi {
-  messages: UIMessage[];
-  status: AgentStatus;
-  threadId: string;
-  /** 返回是否真的发起（空内容 / 生成中会拒绝）。 */
-  submit: (text: string, images?: ImageInput[]) => boolean;
-  abort: () => void;
-  /** 载入一份历史快照（走 aggregateSnapshot），用来复现"历史会话"的渲染结果。 */
-  loadSnapshot: () => void;
+/** 每个会话一份输入草稿：切走再切回来，没发出去的内容还在（E2）。 */
+interface SessionDraft {
+  text: string;
+  images: ImageInput[];
+}
+
+const EMPTY_DRAFT: SessionDraft = { text: '', images: [] };
+
+/** 首条用户消息截 20 字做标题；没有就「未命名」。 */
+function draftTitle(messages: UIMessage[]): string {
+  const firstUser = messages.find(message => message.role === 'user');
+  const text = firstUser ? getTextContent(firstUser).trim() : '';
+
+  return text === '' ? '未命名' : text.slice(0, 20);
+}
+
+/** 日志前缀：多会话并发时事件会交错，用短 id 区分来源。 */
+function shortSessionId(id: string): string {
+  return id.length <= 6 ? id : id.slice(-4);
 }
 
 /**
@@ -212,48 +386,284 @@ const SNAPSHOT_FIXTURE: WireMessage[] = [
   { id: 'msg_b', role: 'assistant', content: '北京今天晴，气温 28°C。需要我再查别的城市吗？' },
 ];
 
+interface SessionsApi {
+  manager: SessionManager;
+  sessions: SessionMeta[];
+  activeId: string | null;
+}
+
 /**
- * 组件层只做三件事：造实例、订阅、转发命令。
+ * 造 manager、订阅会话表与活动会话。
  *
- * 注意这里**没有任何业务逻辑**——状态机、历史组装、中止收尾都在 AgentController 里。
- * 这样 Day 5 要做"切换会话时保留在途请求"时，只需要换实例，不用动视图。
+ * 组件层仍然只做三件事：造实例、订阅、转发命令 —— 会话状态、消息、状态机
+ * 都在各自的 AgentController 里，切换会话只是换一个被订阅的实例。
  */
-function useAgent(appendLog: (text: string, tone?: LogEntry['tone']) => void): AgentApi {
-  const [controller] = useState(
+function useSessions(appendLog: (text: string, tone?: LogEntry['tone']) => void): SessionsApi {
+  const [manager] = useState(
     () =>
-      new AgentController({
-        // 剧本从页面 URL 读（?scenario=tool），这样不用改代码就能切 mock 场景
-        connect: input => connectAgentStream({ ...input, url: resolveAgentUrl() }),
-        // 事件观察口：让右侧日志继续当"直播验收窗口"用。
-        onEvent: (event) => {
-          const line = formatEvent(event);
-          appendLog(line.text, line.tone);
-        },
+      new SessionManager({
+        // 每个会话一个 controller；sessionId 让日志能区分来源（多会话并发时事件会交错）
+        createController: sessionId =>
+          new AgentController({
+            // 剧本从页面 URL 读（?scenario=tool），这样不用改代码就能切 mock 场景
+            connect: input => connectAgentStream({ ...input, url: resolveAgentUrl() }),
+            onEvent: (event) => {
+              const line = formatEvent(event);
+              appendLog(`[${shortSessionId(sessionId)}] ${line.text}`, line.tone);
+            },
+          }),
+        pointer: createLocalStoragePointer(),
+        // 标题规则属于产品层：会话层只负责"什么时候提升"，不解析消息
+        titleOf: controller => draftTitle(controller.snapshot),
       }),
   );
 
-  const [messages, setMessages] = useState<UIMessage[]>(() => controller.snapshot);
-  const [status, setStatus] = useState<AgentStatus>(() => controller.status);
-  const [threadId, setThreadId] = useState('');
+  const [sessions, setSessions] = useState<SessionMeta[]>(() => manager.sessions$.value);
+  const [activeId, setActiveId] = useState<string | null>(() => manager.activeId$.value);
 
   useEffect(() => {
+    const subscriptions = [
+      manager.sessions$.subscribe(setSessions),
+      manager.activeId$.subscribe(setActiveId),
+    ];
+
+    return () => {
+      subscriptions.forEach(subscription => subscription.unsubscribe());
+      manager.dispose();
+    };
+  }, [manager]);
+
+  return { manager, sessions, activeId };
+}
+
+/** 服务端的会话摘要 → 本地列表项。 */
+function toSessionMeta(runtime: RuntimeSummary): SessionMeta {
+  return {
+    id: runtime.thread_id,
+    title: runtime.title === '' ? '未命名' : runtime.title,
+    kind: 'ready',
+    createdAt: runtime.created_at,
+    updatedAt: runtime.updated_at,
+  };
+}
+
+interface BootstrapState {
+  booting: boolean;
+  error: string;
+  retry: () => void;
+}
+
+/**
+ * 启动引导：拉会话列表 → 灌进 manager → 恢复上次会话（P2）。
+ *
+ * 为什么不等"用户点开再拉"：列表本身也需要数据，空列表会让用户以为会话丢了。
+ * 失败时不阻塞页面，只把错误交给界面显示 + 重试。
+ */
+function useBootstrap(manager: SessionManager): BootstrapState {
+  const [booting, setBooting] = useState(true);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    setBooting(true);
+    setError('');
+
+    fetchRuntimes({ url: RUNTIMES_URL, signal: abort.signal })
+      .then(response => {
+        manager.hydrate(response.data.map(toSessionMeta));
+        manager.restore();
+      })
+      .catch((cause: unknown) => {
+        if (abort.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!abort.signal.aborted) setBooting(false);
+      });
+
+    return () => abort.abort();
+  }, [manager, attempt]);
+
+  return { booting, error, retry: () => setAttempt(value => value + 1) };
+}
+
+type HistoryLoadState = 'idle' | 'loading' | 'error';
+
+interface SessionHistoryState {
+  state: HistoryLoadState;
+  error: string;
+  /** 历史拉回来后的附加提示（如"上一轮没生成完"）。 */
+  notice: string;
+  retry: () => void;
+}
+
+/**
+ * 激活历史会话时，把消息拉回来灌进对应的 controller（5-4 / B3）。
+ *
+ * 三条竞态约束（缺一条就会出现"切一下消息就串了/闪回去"）：
+ * 1. 结果只写回**发起请求的那个 controller**，不写"当前 active"；
+ * 2. 响应回来时若该会话已经有消息（用户抢先发了一条）→ **丢弃响应**，现场数据优先；
+ * 3. 同一 threadId 只允许一个在途请求（去重 + 切回来不重复拉）。
+ */
+function useSessionHistory(
+  manager: SessionManager,
+  controller: AgentController | null,
+  meta: SessionMeta | null,
+): SessionHistoryState {
+  const [state, setState] = useState<HistoryLoadState>('idle');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [attempt, setAttempt] = useState(0);
+
+  /** 已经灌过历史的会话（避免每次切回来都拉）。 */
+  const loadedRef = useRef<Set<string>>(new Set());
+  /** 正在拉的会话（避免快速切换时重复请求）。 */
+  const inFlightRef = useRef<Set<string>>(new Set());
+
+  const threadId = meta?.kind === 'ready' ? meta.id : null;
+
+  useEffect(() => {
+    if (!controller || threadId === null) {
+      setState('idle');
+      setError('');
+      setNotice('');
+      return;
+    }
+
+    // 草稿不拉；已有消息（刚聊过/已灌过）也不拉
+    if (controller.snapshot.length > 0 || loadedRef.current.has(threadId)) {
+      setState('idle');
+      // 清掉上一个会话留下的提示/错误，避免串到这条会话上
+      setError('');
+      setNotice('');
+      return;
+    }
+
+    if (inFlightRef.current.has(threadId)) return;
+
+    const abort = new AbortController();
+    inFlightRef.current.add(threadId);
+    setState('loading');
+    setError('');
+    setNotice('');
+
+    fetchHistory({ url: HISTORY_URL, threadId, signal: abort.signal })
+      .then(response => {
+        // 用户可能已经在这个会话里先发了一条：现场数据优先，丢弃历史
+        if (controller.snapshot.length > 0) {
+          loadedRef.current.add(threadId);
+          setState('idle');
+          return;
+        }
+
+        controller.setThreadId(threadId);
+        controller.loadSnapshot(response.messages);
+        loadedRef.current.add(threadId);
+
+        if (response.display_state !== 'ready') {
+          setNotice('该会话上一次生成没有结束');
+        }
+        setState('idle');
+      })
+      .catch((cause: unknown) => {
+        if (abort.signal.aborted) return;
+
+        const message = cause instanceof Error ? cause.message : String(cause);
+
+        // 会话已不在服务端：从列表移除，管理器会自动切到相邻项
+        if (message.includes('HTTP 404')) {
+          setState('idle');
+          manager.remove(threadId);
+          return;
+        }
+
+        setError(message);
+        setState('error');
+      })
+      .finally(() => {
+        inFlightRef.current.delete(threadId);
+      });
+
+    return () => abort.abort();
+  }, [controller, threadId, manager, attempt]);
+
+  return { state, error, notice, retry: () => setAttempt(value => value + 1) };
+}
+
+interface ActiveStream {
+  messages: UIMessage[];
+  status: AgentStatus;
+  threadId: string;
+}
+
+/**
+ * 只订阅「当前活动会话」的三件流。
+ *
+ * 依赖 controller 实例而不是 activeId：草稿提升时 id 变了但实例没变，
+ * 这样不会白退订/重订一次（否则切换瞬间会闪一下空列表）。
+ */
+function useActiveStream(controller: AgentController | null): ActiveStream {
+  const [messages, setMessages] = useState<UIMessage[]>(controller?.snapshot ?? []);
+  const [status, setStatus] = useState<AgentStatus>(controller?.status ?? AgentStatus.Ready);
+  const [threadId, setThreadId] = useState(controller?.threadId$.value ?? '');
+
+  useEffect(() => {
+    if (!controller) {
+      setMessages([]);
+      setStatus(AgentStatus.Ready);
+      setThreadId('');
+      return;
+    }
+
+    // 先同步一次初值：BehaviorSubject 虽会立刻发，但切会话时能少一帧空白
+    setMessages(controller.snapshot);
+    setStatus(controller.status);
+    setThreadId(controller.threadId$.value);
+
     const subscriptions = [
       controller.messages$.subscribe(setMessages),
       controller.status$.subscribe(setStatus),
       controller.threadId$.subscribe(setThreadId),
     ];
 
-    return () => {
-      subscriptions.forEach(subscription => subscription.unsubscribe());
-      controller.dispose();
-    };
+    return () => subscriptions.forEach(subscription => subscription.unsubscribe());
   }, [controller]);
 
-  const submit = useCallback((text: string, images?: ImageInput[]) => controller.submit(text, images), [controller]);
-  const abort = useCallback(() => controller.abort(), [controller]);
-  const loadSnapshot = useCallback(() => controller.loadSnapshot(SNAPSHOT_FIXTURE), [controller]);
+  return { messages, status, threadId };
+}
 
-  return { messages, status, threadId, submit, abort, loadSnapshot };
+/**
+ * 列表里的「生成中」状态。
+ *
+ * 只订阅**已经存在**的 controller：没打开过的会话没必要为了一个转圈图标去造实例。
+ * 会话被删后对应条目留在 map 里也无害（不会再被读到）。
+ */
+function useSessionStatuses(
+  manager: SessionManager,
+  sessions: SessionMeta[],
+): Record<string, AgentStatus> {
+  const [statuses, setStatuses] = useState<Record<string, AgentStatus>>({});
+
+  useEffect(() => {
+    const subscriptions: Subscription[] = [];
+
+    for (const meta of sessions) {
+      if (!manager.hasController(meta.id)) continue;
+
+      subscriptions.push(
+        manager.controllerOf(meta.id).status$.subscribe(status => {
+          setStatuses(previous =>
+            previous[meta.id] === status ? previous : { ...previous, [meta.id]: status },
+          );
+        }),
+      );
+    }
+
+    return () => subscriptions.forEach(subscription => subscription.unsubscribe());
+  }, [manager, sessions]);
+
+  return statuses;
 }
 
 // ============================================================
@@ -455,6 +865,8 @@ interface ComposerProps {
   images: ImageInput[];
   /** 是否正在生成。生成中禁止再次发送，只允许中止。 */
   streaming: boolean;
+  /** 历史还在加载：不能发消息（否则会把空历史发给后端）。 */
+  disabled?: boolean;
   onDraftChange: (next: string) => void;
   onAddImage: (image: ImageInput) => void;
   onRemoveImage: (index: number) => void;
@@ -491,6 +903,7 @@ const Composer: React.FC<ComposerProps> = ({
   draft,
   images,
   streaming,
+  disabled = false,
   onDraftChange,
   onAddImage,
   onRemoveImage,
@@ -502,6 +915,8 @@ const Composer: React.FC<ComposerProps> = ({
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (disabled) return;
+
       // 中文输入法组合态下按 Enter 是「上屏」而不是「发送」，必须放过。
       if (event.nativeEvent.isComposing) return;
 
@@ -510,7 +925,7 @@ const Composer: React.FC<ComposerProps> = ({
         onSend();
       }
     },
-    [onSend],
+    [disabled, onSend],
   );
 
   /**
@@ -578,6 +993,7 @@ const Composer: React.FC<ComposerProps> = ({
         style={styles.textarea}
         value={draft}
         placeholder="输入内容，Enter 发送 / Shift+Enter 换行 · 可直接粘贴截图"
+        disabled={disabled}
         onChange={event => onDraftChange(event.target.value)}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
@@ -597,8 +1013,8 @@ const Composer: React.FC<ComposerProps> = ({
           </button>
           <button
             type="button"
-            style={streaming ? styles.buttonDisabled : styles.button}
-            disabled={streaming}
+            style={streaming || disabled ? styles.buttonDisabled : styles.button}
+            disabled={streaming || disabled}
             onClick={onSend}
           >
             {streaming ? '生成中…' : '发送'}
@@ -715,7 +1131,36 @@ const styles: Record<string, React.CSSProperties> = {
   title: { fontWeight: 600, fontSize: 14 },
   meta: { display: 'flex', gap: 16, color: '#6b7280', fontSize: 12 },
   main: { flex: 1, display: 'flex', minHeight: 0 },
+  sessionColumn: {
+    width: 220,
+    flexShrink: 0,
+    borderRight: '1px solid #e3e5e8',
+    background: '#fbfbfc',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+  },
   chatColumn: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 },
+  centerTip: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 24,
+    color: '#6b7280',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  notice: {
+    margin: '8px 12px 0',
+    padding: '6px 10px',
+    background: '#fff8e1',
+    color: '#8a6d3b',
+    fontSize: 12,
+    borderRadius: 4,
+  },
   logColumn: {
     width: 420,
     borderLeft: '1px solid #e3e5e8',

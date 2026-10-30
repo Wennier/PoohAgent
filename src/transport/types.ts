@@ -153,3 +153,34 @@ export interface ConnectInput {
   /** 品类参数对象；内部会 stringify 进 contexts[0].params。 */
   params?: Record<string, unknown>;
 }
+
+// ============================================================
+// 会话列表与历史（Day 5：E1 / A4）
+// ============================================================
+
+/** 一轮是否还在跑。恢复链路据此决定「只渲染历史」还是「提示仍在生成」。 */
+export type DisplayState = 'ready' | 'in_progress' | 'needs_input';
+
+/** `/runtimes` 返回的一条会话摘要。 */
+export interface RuntimeSummary {
+  thread_id: string;
+  /** 首条用户消息截断而来，可能为空（空会话）。 */
+  title: string;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+  display_state: DisplayState;
+}
+
+/** `POST /runtimes` 的响应。next_cursor 为空串表示没有下一页。 */
+export interface RuntimesResponse {
+  data: RuntimeSummary[];
+  next_cursor: string;
+}
+
+/** `POST /history` 的响应：messages 是扁平 wire 消息，交给 aggregateSnapshot 归约。 */
+export interface HistoryResponse {
+  messages: WireMessage[];
+  display_state: DisplayState;
+  next_cursor: string;
+}

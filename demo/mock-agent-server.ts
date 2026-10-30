@@ -36,6 +36,8 @@
 
 import http from 'node:http';
 
+import { eventsToWireMessages } from './script-to-wire';
+
 // ============================================================
 // §1 常量与类型（已给好，只需理解，不用修改）
 // ============================================================
@@ -44,6 +46,10 @@ const PORT = 3002;
 
 /** 与 vite proxy 的目标一致；真实后端也是这个路径。 */
 const CHAT_PATH = '/api/v6/agentgateway/chat';
+/** 会话列表（Day 5 / E1）。 */
+const RUNTIMES_PATH = '/api/v6/agentgateway/runtimes';
+/** 历史消息（Day 5 / A4）。 */
+const HISTORY_PATH = '/api/v6/agentgateway/history';
 
 /** 两帧之间的间隔。太小浏览器会合并成一批，就看不出"流式"了。 */
 const FRAME_DELAY_MS = 90;
@@ -94,6 +100,108 @@ interface BaseEvent {
 
 /** 具体事件 = 公共字段 + 该事件特有的字段（messageId / delta / …）。 */
 type MockEvent = BaseEvent & Record<string, unknown>;
+
+// ============================================================
+// §1.5 内存会话表（Day 5：/runtimes 与 /history 的数据源）
+// ============================================================
+
+/**
+ * 一轮是否还在跑。
+ *
+ * 客户端拿它决定「只渲染历史」还是「提示仍在生成」。
+ * 当前 mock 是同步流，所以 in_progress 只会出现在流进行中的那一小段时间。
+ */
+type DisplayState = 'ready' | 'in_progress' | 'needs_input';
+
+interface ThreadRecord {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  /** 扁平 wire 消息；工具调用会存成 assistant(tool_calls) + tool + assistant 三段。 */
+  messages: WireMessage[];
+  displayState: DisplayState;
+}
+
+/**
+ * 会话表只活在内存里：重启即丢。
+ *
+ * 这是**过渡实现**——落盘（SQLite / 文件）是「本地持久化」那一项的事，
+ * 但 `/history` 的响应形状现在定死，之后换实现客户端不用改。
+ */
+const threads = new Map<string, ThreadRecord>();
+
+/**
+ * 每次 run 的递增序号。
+ *
+ * 消息 id 必须**跨轮唯一**：否则同一会话第二轮又生成 wire_1，
+ * 客户端按 id 做 React key 时会出现「两个 children 用同一个 key」。
+ */
+let runSequence = 0;
+
+/** 列表标题长度上限（与 demo 侧保持一致）。 */
+const MAX_TITLE_LENGTH = 20;
+
+/** 取一条 wire 消息的可见文本（content_parts 的 text 优先）。 */
+function messageText(message: WireMessage): string {
+  const parts = message.content_parts ?? [];
+  const fromParts = parts
+    .filter(part => part.type === 'text' && typeof part.text === 'string')
+    .map(part => part.text ?? '')
+    .join('');
+
+  return fromParts || message.content || '';
+}
+
+/** 标题 = 首条用户消息前 20 字；取不到就「未命名」。 */
+function titleOf(messages: WireMessage[]): string {
+  const firstUser = messages.find(message => message.role === 'user');
+  const text = firstUser ? messageText(firstUser).trim() : '';
+  if (text === '') return '未命名';
+
+  return text.length > MAX_TITLE_LENGTH ? `${text.slice(0, MAX_TITLE_LENGTH)}…` : text;
+}
+
+function ensureThread(threadId: string): ThreadRecord {
+  const existing = threads.get(threadId);
+  if (existing) return existing;
+
+  const now = Date.now();
+  const created: ThreadRecord = {
+    id: threadId,
+    title: '未命名',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+    displayState: 'ready',
+  };
+  threads.set(threadId, created);
+
+  return created;
+}
+
+/**
+ * 收到 /chat 时先落 user 消息，并把会话标记为「生成中」。
+ *
+ * 这个顺序很重要：中途刷新时历史里应该是「有提问、没回答」，
+ * 而不是整轮消失——那才是真实后端的行为。
+ */
+function appendUserMessage(threadId: string, message: WireMessage): void {
+  const record = ensureThread(threadId);
+  record.messages.push(message);
+  record.displayState = 'in_progress';
+  record.updatedAt = Date.now();
+  if (record.title === '未命名') record.title = titleOf(record.messages);
+}
+
+/** 流结束后把本轮产出的事件还原成 wire 消息追加进历史。 */
+function completeRun(threadId: string, events: MockEvent[]): void {
+  const record = ensureThread(threadId);
+  runSequence += 1;
+  record.messages.push(...eventsToWireMessages(events, `${threadId}_${runSequence}`));
+  record.displayState = 'ready';
+  record.updatedAt = Date.now();
+}
 
 /**
  * 一帧的写出方式（传输层开关）。
@@ -452,6 +560,12 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   const threadId = resolveThreadId(input);
   const scenario = resolveScenario(url);
 
+  // 取最后一条 user：客户端提交时末尾还有一条空的 assistant 占位，不能直接取末尾
+  const incomingUser = [...(input.messages ?? [])].reverse().find(message => message.role === 'user');
+  if (incomingUser) {
+    appendUserMessage(threadId, { ...incomingUser, id: incomingUser.id ?? `user_${Date.now()}` });
+  }
+
   console.log(
     `[mock] ← POST thread_id=${JSON.stringify(input.thread_id ?? '')} ` +
       `channel=${input.contexts?.[0]?.channel ?? '(未传)'} messages=${
@@ -479,25 +593,184 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   });
 
   for (const event of events) {
-    if (clientGone || res.writableEnded) return;
+    if (clientGone || res.writableEnded) break;
     writeEvent(res, event);
     await delay(FRAME_DELAY_MS);
   }
 
-  res.end();
-  console.log(`[mock] ✓ done (${events.length} events, ${Date.now() - startedAt}ms)`);
+  // 客户端中途断开也把这一轮落进历史：mock 的脚本是预生成的，
+  // 落完整结果比留一条「生成中」更接近真实后端（真实后端会继续跑完）。
+  completeRun(threadId, events);
+
+  if (!clientGone && !res.writableEnded) res.end();
+  console.log(
+    `[mock] ✓ done (${events.length} events, ${Date.now() - startedAt}ms${
+      clientGone ? ', client gone' : ''
+    })`,
+  );
+}
+
+// ============================================================
+// §5 会话列表 / 历史（Day 5）
+// ============================================================
+
+interface RuntimesBody {
+  cursor?: string;
+  limit?: number;
+}
+
+interface HistoryBody {
+  thread_id?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+}
+
+function parseJsonBody<T>(raw: string): T {
+  if (!raw.trim()) return {} as T;
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    console.warn('[mock] body 不是合法 JSON，按空请求处理');
+    return {} as T;
+  }
+}
+
+function clampLimit(raw: number | undefined, fallback = 50): number {
+  if (raw === undefined || !Number.isFinite(raw)) return fallback;
+
+  return Math.min(100, Math.max(1, Math.floor(raw)));
+}
+
+/**
+ * 会话列表游标 = `${updated_at}_${thread_id}`。
+ *
+ * 用键集而不是 offset：新会话随时插到最前面，offset 会重复或跳过。
+ */
+function parseThreadCursor(raw: string | undefined): { updatedAt: number; id: string } | null {
+  if (!raw) return null;
+
+  const separator = raw.indexOf('_');
+  if (separator === -1) return null;
+
+  const updatedAt = Number(raw.slice(0, separator));
+  if (!Number.isFinite(updatedAt)) return null;
+
+  return { updatedAt, id: raw.slice(separator + 1) };
+}
+
+/** 历史游标 = 下一条的起始下标；非法时返回 null，由调用方回 400。 */
+function parseMessageCursor(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return 0;
+
+  const offset = Number(raw);
+  return Number.isInteger(offset) && offset >= 0 ? offset : null;
+}
+
+async function handleRuntimes(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = parseJsonBody<RuntimesBody>(await readBody(req));
+  const limit = clampLimit(body.limit);
+  const cursor = parseThreadCursor(body.cursor);
+
+  if (body.cursor && cursor === null) {
+    sendJson(res, 400, { error: { code: 'invalid_cursor' } });
+    return;
+  }
+
+  const sorted = [...threads.values()].sort(
+    (a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1),
+  );
+  const rest = cursor
+    ? sorted.filter(
+        record =>
+          record.updatedAt < cursor.updatedAt ||
+          (record.updatedAt === cursor.updatedAt && record.id < cursor.id),
+      )
+    : sorted;
+  const page = rest.slice(0, limit);
+  const last = page.at(-1);
+
+  sendJson(res, 200, {
+    data: page.map(record => ({
+      thread_id: record.id,
+      title: record.title,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+      message_count: record.messages.length,
+      display_state: record.displayState,
+    })),
+    next_cursor: rest.length > limit && last ? `${last.updatedAt}_${last.id}` : '',
+  });
+}
+
+async function handleHistory(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const body = parseJsonBody<HistoryBody>(await readBody(req));
+  const threadId = body.thread_id?.trim();
+
+  if (!threadId) {
+    sendJson(res, 400, { error: { code: 'thread_id_required' } });
+    return;
+  }
+
+  const record = threads.get(threadId);
+  if (!record) {
+    sendJson(res, 404, { error: { code: 'thread_not_found' } });
+    return;
+  }
+
+  const offset = parseMessageCursor(body.cursor);
+  if (offset === null) {
+    sendJson(res, 400, { error: { code: 'invalid_cursor' } });
+    return;
+  }
+
+  const limit = clampLimit(body.limit, 200);
+  const page = record.messages.slice(offset, offset + limit);
+  const nextOffset = offset + page.length;
+
+  sendJson(res, 200, {
+    messages: page,
+    display_state: record.displayState,
+    next_cursor: nextOffset < record.messages.length ? String(nextOffset) : '',
+  });
 }
 
 const server = http.createServer((req, res) => {
   const url = readUrl(req);
 
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-XSRF-TOKEN');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // DELETE /runtimes/:id —— 删会话（Day 5 / E1）
+  if (req.method === 'DELETE') {
+    const prefix = `${RUNTIMES_PATH}/`;
+
+    if (!url.pathname.startsWith(prefix)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`Not Found: ${url.pathname}`);
+      return;
+    }
+
+    const threadId = decodeURIComponent(url.pathname.slice(prefix.length));
+    // 幂等由调用方决定：这里如实返回"本来就没有"（404）
+    if (threads.delete(threadId)) {
+      res.writeHead(204);
+      res.end();
+    } else {
+      sendJson(res, 404, { error: { code: 'thread_not_found' } });
+    }
     return;
   }
 
@@ -507,23 +780,36 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (url.pathname !== CHAT_PATH) {
-    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`Not Found: ${url.pathname}`);
-    return;
-  }
-
-  void handleChat(req, res).catch((error: unknown) => {
+  const reportError = (error: unknown): void => {
     console.error('[mock] handler failed:', error);
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
     }
 
     if (!res.writableEnded) res.end('mock server error');
-  });
+  };
+
+  if (url.pathname === RUNTIMES_PATH) {
+    void handleRuntimes(req, res).catch(reportError);
+    return;
+  }
+
+  if (url.pathname === HISTORY_PATH) {
+    void handleHistory(req, res).catch(reportError);
+    return;
+  }
+
+  if (url.pathname !== CHAT_PATH) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`Not Found: ${url.pathname}`);
+    return;
+  }
+
+  void handleChat(req, res).catch(reportError);
 });
 
 server.listen(PORT, () => {
   console.log(`[mock] listening on http://localhost:${PORT}${CHAT_PATH}`);
-  console.log('[mock] 骨架版：buildScript/writeEvent 还是空的，填完再看 curl 输出');
+  console.log(`[mock] 会话列表：POST ${RUNTIMES_PATH}`);
+  console.log(`[mock] 历史消息：POST ${HISTORY_PATH}`);
 });
