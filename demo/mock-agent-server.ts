@@ -324,20 +324,60 @@ function splitToDeltas(text: string): string[] {
  * - TEXT_MESSAGE_CONTENT 的 messageId 必须与 START 的一致（客户端靠它定位追加到哪条消息）
  * - timestamp 用 Date.now()，可以让多条事件共享同一个毫秒值，不影响
  */
-/** 剧本。当前只需要 normal 与 tool，其余场景等做到那一步再加。 */
-type Scenario = 'normal' | 'tool' | 'markdown';
+/** 内容剧本。 */
+type ContentScenario = 'normal' | 'tool' | 'markdown';
 
-const KNOWN_SCENARIOS: readonly Scenario[] = ['normal', 'tool', 'markdown'];
+const KNOWN_SCENARIOS: readonly ContentScenario[] = ['normal', 'tool', 'markdown'];
+
+/**
+ * 错误剧本（Day 6 复现用）。每种错误类型一条 URL：
+ * - `error-run[:业务码]` 先吐半句再 RUN_ERROR（run 类，默认 439906）
+ * - `http-<状态码>`      直接非 2xx（query 类；429 带 Retry-After）
+ * - `cut[:帧数]`         吐 N 帧后掐断 socket（stream 类）
+ * - `reset`              不回任何字节就断（连接错误）
+ */
+type ErrorScenario =
+  | { kind: 'run'; code: string }
+  | { kind: 'http'; status: number }
+  | { kind: 'cut'; after: number }
+  | { kind: 'reset' };
+
+/** 业务码 → 文案。未知码不猜。 */
+const RUN_ERROR_MESSAGES: Record<string, string> = {
+  '439902': '未登录',
+  '439903': '无权访问该文档',
+  '439906': '请求太频繁，请稍后再试',
+  '439907': '积分不足',
+};
+
+type ResolvedScenario = { content: ContentScenario } | { error: ErrorScenario };
 
 /** 从 query 选剧本；不认识的取值回落 normal，避免手抖打错就 500。 */
-function resolveScenario(url: URL): Scenario {
+function resolveScenario(url: URL): ResolvedScenario {
   const raw = url.searchParams.get('scenario');
-  if (!raw) return 'normal';
+  if (!raw) return { content: 'normal' };
 
-  if ((KNOWN_SCENARIOS as readonly string[]).includes(raw)) return raw as Scenario;
+  const [name, arg] = raw.split(':');
+
+  if (name === 'error-run') return { error: { kind: 'run', code: arg || '439906' } };
+  if (name === 'reset') return { error: { kind: 'reset' } };
+
+  if (name === 'cut') {
+    const after = Number(arg ?? 2);
+    return { error: { kind: 'cut', after: Number.isInteger(after) && after > 0 ? after : 2 } };
+  }
+
+  if (name.startsWith('http-')) {
+    const status = Number(name.slice(5));
+    if (Number.isInteger(status) && status >= 400 && status <= 599) {
+      return { error: { kind: 'http', status } };
+    }
+  }
+
+  if ((KNOWN_SCENARIOS as readonly string[]).includes(raw)) return { content: raw as ContentScenario };
 
   console.warn(`[mock] 未知 scenario="${raw}"，回落到 normal`);
-  return 'normal';
+  return { content: 'normal' };
 }
 
 /**
@@ -356,13 +396,48 @@ function describeIncomingImages(input: ChatInput): string {
   return `收到 ${images.length} 张图片：${names.join('、')}。`;
 }
 
-function buildScript(scenario: Scenario, input: ChatInput, threadId: string): MockEvent[] {
+function buildScript(scenario: ContentScenario, input: ChatInput, threadId: string): MockEvent[] {
   if (scenario === 'tool') return buildToolScript(input, threadId);
 
   const reply = scenario === 'markdown' ? MOCK_MARKDOWN_REPLY : MOCK_REPLY;
   const imageNote = describeIncomingImages(input);
 
   return buildNormalScript(input, threadId, imageNote === '' ? reply : `${imageNote}\n\n${reply}`);
+}
+
+/**
+ * run / cut 的错误剧本。
+ *
+ * cut 刻意不补 RUN_FINISHED，由调用方吐够帧数后 destroy socket：
+ * 正常 `end()` 是"流结束了"，只有掐断才是"流中断"，两者在客户端走完全不同的分支。
+ */
+function buildErrorScript(error: ErrorScenario, threadId: string): MockEvent[] {
+  const messageId = `msg_${Date.now()}_assistant`;
+  const events: MockEvent[] = [
+    { type: 'RUN_STARTED', timestamp: Date.now(), threadId },
+    { type: 'TEXT_MESSAGE_START', timestamp: Date.now(), threadId, messageId, role: 'assistant' },
+  ];
+
+  // 先吐一点正文：保证"屏幕上有半截回答"这个现象成立，否则复现不出"用户以为说完了"
+  for (const delta of splitToDeltas('北京今天晴，气温 28°C。').slice(0, 3)) {
+    events.push({ type: 'TEXT_MESSAGE_CONTENT', timestamp: Date.now(), threadId, messageId, delta });
+  }
+  events.push({ type: 'TEXT_MESSAGE_END', timestamp: Date.now(), threadId, messageId });
+
+  if (error.kind === 'run') {
+    const message = RUN_ERROR_MESSAGES[error.code] ?? `生成失败（${error.code}）`;
+    events.push({ type: 'RUN_ERROR', timestamp: Date.now(), threadId, code: error.code, message });
+  }
+
+  return events;
+}
+
+/** 非 2xx。429 带 Retry-After，用来验证"尊重 Retry-After"。 */
+function sendHttpError(res: http.ServerResponse, status: number): void {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json; charset=utf-8' };
+  if (status === 429) headers['Retry-After'] = '3';
+  res.writeHead(status, headers);
+  res.end(JSON.stringify({ error: { code: `http_${status}` } }));
 }
 
 // -- 剧本一：纯文本 --------------------------------------------------
@@ -558,7 +633,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
   const rawBody = await readBody(req);
   const input = parseChatInput(rawBody);
   const threadId = resolveThreadId(input);
-  const scenario = resolveScenario(url);
+  const resolved = resolveScenario(url);
 
   // 取最后一条 user：客户端提交时末尾还有一条空的 assistant 占位，不能直接取末尾
   const incomingUser = [...(input.messages ?? [])].reverse().find(message => message.role === 'user');
@@ -570,8 +645,24 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
     `[mock] ← POST thread_id=${JSON.stringify(input.thread_id ?? '')} ` +
       `channel=${input.contexts?.[0]?.channel ?? '(未传)'} messages=${
         input.messages?.length ?? 0
-      } scenario=${scenario}`,
+      } scenario=${url.searchParams.get('scenario') ?? 'normal'}`,
   );
+
+  // 连接级与 HTTP 级错误必须在写 SSE 头之前返回：
+  // 一旦 writeHead(200) 发出去，浏览器就进入流模式，4xx/5xx 就没法再表达了。
+  if ('error' in resolved) {
+    if (resolved.error.kind === 'reset') {
+      req.socket.destroy();
+      console.log('[mock] ✂ reset：未回任何字节即断开');
+      return;
+    }
+
+    if (resolved.error.kind === 'http') {
+      sendHttpError(res, resolved.error.status);
+      console.log(`[mock] ✗ http-${resolved.error.status}`);
+      return;
+    }
+  }
 
   // 流式响应头。不能设 Content-Length，否则浏览器会等整个 body 到齐才展示。
   res.writeHead(200, {
@@ -582,7 +673,11 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
 
   res.flushHeaders?.();
 
-  const events = buildScript(scenario, input, threadId);
+  const events =
+    'error' in resolved
+      ? buildErrorScript(resolved.error, threadId)
+      : buildScript(resolved.content, input, threadId);
+  const cutAfter = 'error' in resolved && resolved.error.kind === 'cut' ? resolved.error.after : null;
   const startedAt = Date.now();
 
   // 客户端断开后必须立刻停止生产：`res.writableEnded` 只在「我方主动 end」后为 true，
@@ -592,8 +687,16 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse): 
     if (!res.writableEnded) clientGone = true;
   });
 
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     if (clientGone || res.writableEnded) break;
+
+    // cut 剧本：吐够帧数就掐断 socket。用 destroy 而不是 end —— 前者是"流中断"，后者是"流正常结束"
+    if (cutAfter !== null && index >= cutAfter) {
+      res.destroy();
+      console.log(`[mock] ✂ cut：已吐 ${index} 个事件后断开`);
+      return;
+    }
+
     writeEvent(res, event);
     await delay(FRAME_DELAY_MS);
   }

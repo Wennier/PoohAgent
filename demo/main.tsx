@@ -1034,6 +1034,51 @@ interface LogPanelProps {
   onClear: () => void;
 }
 
+/**
+ * 错误剧本切换器（Day 6 复现用）。
+ *
+ * 剧本是在"建立连接时"读取的，所以切换必须重新加载页面——热切不会影响已经在跑的流。
+ * 选项与 mock 的 `?scenario=` 一一对应，见 demo/mock-agent-server.ts 的 resolveScenario。
+ */
+const SCENARIO_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: '正常' },
+  { value: 'tool', label: '工具调用' },
+  { value: 'markdown', label: 'Markdown' },
+  { value: 'error-run:439906', label: '错误·限流 439906' },
+  { value: 'error-run:439902', label: '错误·未登录 439902' },
+  { value: 'error-run:439903', label: '错误·无权限 439903' },
+  { value: 'error-run:439907', label: '错误·积分不足 439907' },
+  { value: 'http-429', label: '错误·HTTP 429' },
+  { value: 'http-500', label: '错误·HTTP 500' },
+  { value: 'http-401', label: '错误·HTTP 401' },
+  { value: 'cut:4', label: '错误·流中断' },
+  { value: 'reset', label: '错误·连接重置' },
+];
+
+const ScenarioPicker: React.FC = () => {
+  const current = new URLSearchParams(window.location.search).get('scenario') ?? '';
+
+  return (
+    <select
+      aria-label="错误剧本"
+      value={current}
+      style={styles.scenarioPicker}
+      onChange={event => {
+        const next = new URL(window.location.href);
+        if (event.target.value) next.searchParams.set('scenario', event.target.value);
+        else next.searchParams.delete('scenario');
+        window.location.href = next.toString();
+      }}
+    >
+      {SCENARIO_OPTIONS.map(option => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+};
+
 const LogPanel: React.FC<LogPanelProps> = ({ logs, onClear }) => {
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -1050,6 +1095,7 @@ const LogPanel: React.FC<LogPanelProps> = ({ logs, onClear }) => {
           {logs.length}
           ）
         </span>
+        <ScenarioPicker />
         <button type="button" style={styles.buttonTiny} onClick={onClear}>
           清空
         </button>
@@ -1321,6 +1367,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     cursor: 'not-allowed',
     font: 'inherit',
+  },
+  scenarioPicker: {
+    marginLeft: 'auto',
+    marginRight: 8,
+    fontSize: 12,
+    maxWidth: 170,
+    padding: '2px 4px',
+    border: '1px solid #d0d4d9',
+    borderRadius: 4,
+    background: '#fff',
+    color: '#3c4043',
   },
   buttonTiny: {
     padding: '2px 8px',
